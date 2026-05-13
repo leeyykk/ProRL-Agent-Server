@@ -51,8 +51,18 @@ def get_custom_reward_fn(config):
 
     reward_kwargs = dict(reward_fn_config.get("reward_kwargs", {}))
 
+    import inspect
+    _sig = inspect.signature(raw_fn)
+    _accepts_var_keyword = any(
+        p.kind == inspect.Parameter.VAR_KEYWORD for p in _sig.parameters.values()
+    )
+    _explicit_params = set(_sig.parameters.keys())
+
     def wrapped_fn(*args, **kwargs):
-        return raw_fn(*args, **kwargs, **reward_kwargs)
+        merged = {**kwargs, **reward_kwargs}
+        if not _accepts_var_keyword:
+            merged = {k: v for k, v in merged.items() if k in _explicit_params}
+        return raw_fn(*args, **merged)
 
     return wrapped_fn
 

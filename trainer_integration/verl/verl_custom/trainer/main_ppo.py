@@ -149,7 +149,7 @@ class TaskRunner:
 
         reward_manager_name = config.reward_manager.get("type", "naive")
         if reward_manager_name == "naive":
-            from verl.workers.reward_manager import NaiveRewardManager
+            from verl_custom.nvidia.reward_manager import NaiveRewardManager
 
             reward_manager_cls = NaiveRewardManager
         elif reward_manager_name == "prime":
@@ -169,7 +169,13 @@ class TaskRunner:
         
         # enforce placement on head node
         strategy = NodeAffinitySchedulingStrategy(node_id = ray.get_runtime_context().get_node_id(), soft = False)
-        reward_fn = reward_manager_cls.options(scheduling_strategy=strategy).remote(tokenizer=tokenizer, compute_score=None, config=config.reward_manager)
+        from omegaconf import OmegaConf
+        reward_manager_config = OmegaConf.to_container(config.reward_manager, resolve=True)
+        custom_reward_fn_cfg = OmegaConf.to_container(config.get("custom_reward_function", {}), resolve=True) or {}
+        reward_manager_config["custom_reward_function"] = custom_reward_fn_cfg
+        from omegaconf import DictConfig
+        reward_manager_config = OmegaConf.create(reward_manager_config)
+        reward_fn = reward_manager_cls.options(scheduling_strategy=strategy).remote(tokenizer=tokenizer, compute_score=None, config=reward_manager_config)
         val_reward_fn = reward_fn
 
         resource_pool_manager = ResourcePoolManager(resource_pool_spec=resource_pool_spec, mapping=mapping)

@@ -27,6 +27,14 @@ class NaiveRewardManager:
         self.tokenizer = tokenizer
         self.config = config
         self.num_examine = self.config.num_examine  # the number of batches of decoded responses to print to the console
+        if compute_score is None:
+            custom_cfg = config.get("custom_reward_function", {}) or {}
+            file_path = custom_cfg.get("path") if custom_cfg else None
+            fn_name = custom_cfg.get("name") if custom_cfg else None
+            if file_path and fn_name:
+                from verl_custom.trainer.ppo.reward import get_custom_reward_fn
+                from omegaconf import OmegaConf
+                compute_score = get_custom_reward_fn(OmegaConf.create({"custom_reward_function": dict(custom_cfg)}))
         self.compute_score = compute_score or _default_compute_score
         if isinstance(self.config.server_ip, str):
             self.server_ip = self.config.server_ip
@@ -90,8 +98,15 @@ class NaiveRewardManager:
 
             ground_truth = []
             for data_item in data:
-                if 'ground_truth' in data_item.non_tensor_batch['reward_model']:
-                    ground_truth.append(data_item.non_tensor_batch['reward_model']['ground_truth'].tolist() if isinstance(data_item.non_tensor_batch['reward_model']['ground_truth'], np.ndarray) else data_item.non_tensor_batch['reward_model']['ground_truth'])
+                reward_model = data_item.non_tensor_batch.get('reward_model', {})
+                if isinstance(reward_model, str):
+                    import json as _json
+                    try:
+                        reward_model = _json.loads(reward_model)
+                    except Exception:
+                        reward_model = {}
+                if reward_model and 'ground_truth' in reward_model:
+                    ground_truth.append(reward_model['ground_truth'].tolist() if isinstance(reward_model['ground_truth'], np.ndarray) else reward_model['ground_truth'])
                 else:
                     ground_truth.append(None)
 
