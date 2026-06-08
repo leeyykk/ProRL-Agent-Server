@@ -1,0 +1,68 @@
+polar_rollout_url: "http://127.0.0.1:48080"
+polar_gateway_url: "http://127.0.0.1:48100"
+polar_reward_key: "score"
+polar_max_async_level: 1
+polar_request_timeout: 1800
+polar_callback_host: "127.0.0.1"
+polar_min_complete_accept_fraction: 1.0
+polar_allow_weight_update_overlap: false
+polar_weight_update_pause_timeout: 300
+
+polar_task_template:
+  timeout_seconds: 1800
+  runtime:
+    backend: "docker"
+    image: "{sample.metadata.runtime_image}"
+    network: "host"
+    workdir: "/polar/session/workspace"
+    cpus: 8
+    memory_mb: 32768
+    env:
+      HOME: "/polar/session/home"
+      PATH: "/home/polar/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      NPM_CONFIG_CACHE: "/polar/session/npm-cache"
+    prepare:
+      - type: exec
+        command: >-
+          rm -rf /polar/session/workspace &&
+          mkdir -p /polar/session/logs/agent /polar/session/workspace /polar/session/npm-cache "$HOME/.venv/bin" &&
+          cp -a /testbed/. /polar/session/workspace/ &&
+          ln -sf /opt/miniconda3/envs/testbed/bin/python "$HOME/.venv/bin/python" &&
+          ln -sf /opt/miniconda3/envs/testbed/bin/python "$HOME/.venv/bin/python3" &&
+          npm install -g --no-audit --no-fund @qwen-code/qwen-code@0.14.5 &&
+          git config --global core.pager '' &&
+          cd /polar/session/workspace &&
+          (git reset --hard || true)
+    eval_prepare:
+      - type: exec
+        command: >-
+          mkdir -p /polar/session/logs/agent "$HOME/.venv/bin" &&
+          ln -sf /opt/miniconda3/envs/testbed/bin/python "$HOME/.venv/bin/python" &&
+          ln -sf /opt/miniconda3/envs/testbed/bin/python "$HOME/.venv/bin/python3" &&
+          git config --global core.pager ''
+  agent:
+    harness: "qwen_code"
+    model_name: "/work1/huggingface_models/Qwen3-4B"
+  builder:
+    strategy: "prefix_merging"
+  evaluator:
+    strategy: "swebench_harness"
+    refresh_runtime: true
+    config:
+      repo_dir: "/testbed"
+      patch_command: "cd /polar/session/workspace && git add -A && git diff --cached --binary"
+      instance: "{sample.metadata.instance}"
+      exclude_patterns:
+        - "trajectories/**"
+        - "**/trajectories/**"
+        - "node_modules/**"
+        - "**/node_modules/**"
+        - ".cache/**"
+        - "**/.cache/**"
+        - ".venv/**"
+        - "**/.venv/**"
+        - ".qwen/**"
+        - "**/.qwen/**"
+
+polar_task_id_template: "polar-swegym-qwen3-4b-3h200-{rollout_id}-{sample.group_index}"
+
