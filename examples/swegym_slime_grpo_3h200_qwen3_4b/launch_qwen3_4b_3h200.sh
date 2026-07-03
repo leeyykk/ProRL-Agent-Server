@@ -68,9 +68,15 @@ export SGLANG_ENABLE_JIT_DEEPGEMM="${SGLANG_ENABLE_JIT_DEEPGEMM:-0}"
 export SGLANG_BATCH_INVARIANT_OPS_ENABLE_MM_DEEPGEMM="${SGLANG_BATCH_INVARIANT_OPS_ENABLE_MM_DEEPGEMM:-0}"
 export NCCL_P2P_DISABLE="${NCCL_P2P_DISABLE:-1}"
 NVIDIA_SITE_PACKAGES="${PROJECT_ROOT}/.venv/lib/python3.12/site-packages/nvidia"
-if [ -d "${NVIDIA_SITE_PACKAGES}/cu13/lib" ]; then
+if [ -d "${NVIDIA_SITE_PACKAGES}" ]; then
     export CUDA_HOME="${CUDA_HOME:-/usr/local/cuda-13.0}"
-    export LD_LIBRARY_PATH="${NVIDIA_SITE_PACKAGES}/cu13/lib:${NVIDIA_SITE_PACKAGES}/cudnn/lib:${NVIDIA_SITE_PACKAGES}/nccl/lib:${NVIDIA_SITE_PACKAGES}/nvshmem/lib:${LD_LIBRARY_PATH:-}"
+    NVIDIA_LIBRARY_PATHS="$(
+        find "${NVIDIA_SITE_PACKAGES}" -mindepth 2 -maxdepth 2 -type d -name lib -print 2>/dev/null \
+            | paste -sd: -
+    )"
+    if [ -n "${NVIDIA_LIBRARY_PATHS}" ]; then
+        export LD_LIBRARY_PATH="${NVIDIA_LIBRARY_PATHS}:${LD_LIBRARY_PATH:-}"
+    fi
 fi
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 export PYTHONPATH="${MEGATRON_DIR}:${SLIME_DIR}:${PROJECT_ROOT}/src"
