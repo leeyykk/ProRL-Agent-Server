@@ -48,7 +48,9 @@ This does the following:
 - downloads Qwen3.5-4B if the local checkpoint is missing
 - builds the SWE-Gym Docker runtime images and JSONL
 - preinstalls Codex CLI to a host prefix that is mounted into containers
-- converts Qwen3.5-4B to Megatron `torch_dist` with TP=2
+- converts Qwen3.5-4B to Megatron `torch_dist` with TP=2. Conversion uses the
+  local transformer implementation; Transformer Engine is a training/runtime
+  choice and is not required to write the checkpoint.
 
 The setup intentionally uses Python 3.12. If the machine's `python3` is 3.13
 and an old `.venv` was already created, SGLang may fail while building
