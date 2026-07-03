@@ -12,6 +12,7 @@ HF_CHECKPOINT="${HF_CHECKPOINT:-}"
 SWEGYM_DATA="${SWEGYM_DATA:-}"
 TORCH_DIST_DIR="${TORCH_DIST_DIR:-}"
 PREINSTALLED_AGENT_CLI="${PREINSTALLED_AGENT_CLI:-}"
+RUNTIME_BACKEND="${RUNTIME_BACKEND:-docker}"
 TRAIN_GPUS="${TRAIN_GPUS:-}"
 ROLLOUT_GPU="${ROLLOUT_GPU:-}"
 SWEEP_ID="${SWEEP_ID:-}"
@@ -68,6 +69,7 @@ Options:
   --swegym-data PATH
   --torch-dist-dir PATH
   --preinstalled-agent-cli PATH
+  --runtime-backend docker|apptainer
   --train-gpus CSV       Example: 4,6
   --rollout-gpu GPU      Example: 1
   --num-rollout N
@@ -88,6 +90,7 @@ while [ "$#" -gt 0 ]; do
         --swegym-data) SWEGYM_DATA="$2"; shift 2 ;;
         --torch-dist-dir) TORCH_DIST_DIR="$2"; shift 2 ;;
         --preinstalled-agent-cli) PREINSTALLED_AGENT_CLI="$2"; shift 2 ;;
+        --runtime-backend) RUNTIME_BACKEND="$2"; shift 2 ;;
         --train-gpus) TRAIN_GPUS="$2"; shift 2 ;;
         --rollout-gpu) ROLLOUT_GPU="$2"; shift 2 ;;
         --sweep-id) SWEEP_ID="$2"; shift 2 ;;
@@ -110,6 +113,27 @@ if [ -z "${WORK_ROOT}" ] || [ -z "${RUN_ROOT}" ] || [ -z "${HF_CHECKPOINT}" ] \
     echo "ERROR: --work-root, --run-root, --hf-checkpoint, --swegym-data, --torch-dist-dir, --train-gpus, and --rollout-gpu are required." >&2
     usage >&2
     exit 2
+fi
+case "${RUNTIME_BACKEND}" in
+    docker|apptainer) ;;
+    *) echo "ERROR: --runtime-backend must be docker or apptainer, got: ${RUNTIME_BACKEND}" >&2; exit 2 ;;
+esac
+
+if [ ! -f "${HF_CHECKPOINT}/config.json" ]; then
+    echo "ERROR: Hugging Face checkpoint is missing or incomplete: ${HF_CHECKPOINT}" >&2
+    echo "       Expected file: ${HF_CHECKPOINT}/config.json" >&2
+    echo "       Either pass the actual model directory with --hf-checkpoint, or rerun setup without --skip-model-download." >&2
+    exit 1
+fi
+if [ ! -f "${SWEGYM_DATA}" ]; then
+    echo "ERROR: SWE-Gym data JSONL not found: ${SWEGYM_DATA}" >&2
+    echo "       Rerun setup without --skip-data, or pass the correct --swegym-data path." >&2
+    exit 1
+fi
+if [ ! -d "${TORCH_DIST_DIR}" ]; then
+    echo "ERROR: converted Megatron torch_dist checkpoint not found: ${TORCH_DIST_DIR}" >&2
+    echo "       Rerun setup without --skip-convert, or pass the correct --torch-dist-dir path." >&2
+    exit 1
 fi
 
 MAIN_FIGURES_DIR="${MAIN_FIGURES_DIR:-${RUN_ROOT}/main_figures}"
@@ -208,6 +232,7 @@ for config in "${CONFIGS[@]}"; do
         TRANSFORMER_IMPL="${TRANSFORMER_IMPL}" \
         AGENT_HARNESS=codex \
         PREINSTALLED_AGENT_CLI="${PREINSTALLED_AGENT_CLI}" \
+        RUNTIME_BACKEND="${RUNTIME_BACKEND}" \
         AGENT_NPM_PACKAGE="@openai/codex@0.121.0" \
         SAVE_INTERVAL=1000000 \
         KEEP_CHECKPOINTS=0 \

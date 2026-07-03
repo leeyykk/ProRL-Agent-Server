@@ -35,6 +35,7 @@ SAVE_DIR="${SAVE_DIR:-${RUN_DIR}/checkpoints}"
 SWEGYM_DATA="${SWEGYM_DATA:-${WORK_ROOT}/data/swegym_train_docker_3h200.jsonl}"
 TOPOLOGY_TEMPLATE="${TOPOLOGY_TEMPLATE:-${SCRIPT_DIR}/topology.docker_3h200.yaml}"
 POLAR_CONFIG_TEMPLATE="${POLAR_CONFIG_TEMPLATE:-${SCRIPT_DIR}/polar_config.docker_3h200.yaml}"
+RUNTIME_BACKEND="${RUNTIME_BACKEND:-}"
 TOPOLOGY_PATH="${RUN_DIR}/topology.yaml"
 POLAR_CONFIG_PATH="${RUN_DIR}/polar_config.yaml"
 SGLANG_ROUTER_HOST="${SGLANG_ROUTER_HOST:-$(hostname -I | awk '{print $1}')}"
@@ -99,7 +100,7 @@ if [ ! -f "${REF_LOAD}/latest_checkpointed_iteration.txt" ]; then
 fi
 if [ ! -f "${SWEGYM_DATA}" ]; then
     echo "ERROR: SWE-Gym JSONL not found: ${SWEGYM_DATA}" >&2
-    echo "Run prepare_swegym_docker_data.sh first." >&2
+    echo "Run prepare_swegym_docker_data.sh or prepare_swegym_apptainer_data_b200.sh first." >&2
     exit 1
 fi
 
@@ -185,6 +186,8 @@ if "${POLAR_MIN_COMPLETE_ACCEPT_FRACTION}":
     config["polar_min_complete_accept_fraction"] = float("${POLAR_MIN_COMPLETE_ACCEPT_FRACTION}")
 task = config.setdefault("polar_task_template", {})
 runtime = task.setdefault("runtime", {})
+if "${RUNTIME_BACKEND}":
+    runtime["backend"] = "${RUNTIME_BACKEND}"
 runtime_env = runtime.setdefault("env", {})
 prepare_steps = runtime.get("prepare") or []
 for step in prepare_steps:
