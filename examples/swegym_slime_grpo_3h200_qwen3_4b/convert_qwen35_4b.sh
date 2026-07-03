@@ -78,6 +78,7 @@ MODEL_ARGS=(
 echo "Converting ${HF_CHECKPOINT} -> ${TORCH_DIST_DIR}"
 echo "Conversion parallelism: TP_SIZE=${TP_SIZE} PP_SIZE=${PP_SIZE} CP_SIZE=${CP_SIZE} NPROC_PER_NODE=${NPROC_PER_NODE} TRANSFORMER_IMPL=${TRANSFORMER_IMPL}"
 CUDA_DEVICE_MAX_CONNECTIONS=1 \
+SLIME_CONVERT_AUTO_PIPELINE=0 \
 PYTHONPATH="${MEGATRON_DIR}:${SLIME_DIR}:${PROJECT_ROOT}/src" \
 "${PYTHON_BIN}" -m torch.distributed.run --nproc_per_node "${NPROC_PER_NODE}" \
     "${SLIME_DIR}/tools/convert_hf_to_torch_dist.py" \
