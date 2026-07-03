@@ -55,6 +55,12 @@ sed \
     's/os.environ.get("SLIME_CONVERT_AUTO_PIPELINE", "1")/os.environ.get("SLIME_CONVERT_AUTO_PIPELINE", "0")/' \
     "${SLIME_DIR}/tools/convert_hf_to_torch_dist.py" \
     > "${CONVERT_TOOL}"
+sed -i \
+    '/^    print(/i\
+    args.pipeline_model_parallel_size = int(os.environ.get("SLIME_FORCE_PIPELINE_MODEL_PARALLEL_SIZE", args.pipeline_model_parallel_size))\
+    if args.pipeline_model_parallel_size == 1:\
+        args.decoder_last_pipeline_num_layers = None' \
+    "${CONVERT_TOOL}"
 
 # Mirrors slime/slime/scripts/models/qwen3.5-4B.sh. Qwen3.5-4B is a
 # Qwen3_5ForConditionalGeneration checkpoint with nested text weights and a
@@ -85,6 +91,7 @@ echo "Converting ${HF_CHECKPOINT} -> ${TORCH_DIST_DIR}"
 echo "Conversion parallelism: TP_SIZE=${TP_SIZE} PP_SIZE=${PP_SIZE} CP_SIZE=${CP_SIZE} NPROC_PER_NODE=${NPROC_PER_NODE} TRANSFORMER_IMPL=${TRANSFORMER_IMPL}"
 CUDA_DEVICE_MAX_CONNECTIONS=1 \
 SLIME_CONVERT_AUTO_PIPELINE=0 \
+SLIME_FORCE_PIPELINE_MODEL_PARALLEL_SIZE="${PP_SIZE}" \
 PYTHONPATH="${MEGATRON_DIR}:${SLIME_DIR}:${PROJECT_ROOT}/src" \
 "${PYTHON_BIN}" -m torch.distributed.run --nproc_per_node "${NPROC_PER_NODE}" \
     "${CONVERT_TOOL}" \
