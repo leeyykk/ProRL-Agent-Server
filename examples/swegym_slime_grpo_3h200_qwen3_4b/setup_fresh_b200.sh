@@ -132,13 +132,19 @@ fi
 
 if [ "${SKIP_MODEL_DOWNLOAD}" != "1" ] && [ ! -f "${HF_CHECKPOINT}/config.json" ]; then
     uv pip install --python "${PYTHON_BIN}" -U "huggingface_hub[cli]"
-    HF_CLI="${PROJECT_ROOT}/.venv/bin/huggingface-cli"
+    HF_CLI="${PROJECT_ROOT}/.venv/bin/hf"
     if [ ! -x "${HF_CLI}" ]; then
-        HF_CLI="$(command -v huggingface-cli || true)"
+        HF_CLI="$(command -v hf || true)"
     fi
     if [ -z "${HF_CLI}" ]; then
-        echo "ERROR: huggingface-cli was not found after installing huggingface_hub[cli]." >&2
-        exit 1
+        HF_CLI="${PROJECT_ROOT}/.venv/bin/huggingface-cli"
+        if [ ! -x "${HF_CLI}" ]; then
+            HF_CLI="$(command -v huggingface-cli || true)"
+        fi
+        if [ -z "${HF_CLI}" ]; then
+            echo "ERROR: neither hf nor huggingface-cli was found after installing huggingface_hub." >&2
+            exit 1
+        fi
     fi
     "${HF_CLI}" download \
         "${HF_MODEL_ID}" \
