@@ -54,6 +54,7 @@ export TMPDIR="${TMPDIR:-/tmp/prorl_tmp_${RUN_STEM}}"
 export TEMP="${TMPDIR}"
 export TMP="${TMPDIR}"
 export RAY_TMPDIR="${RAY_TMPDIR:-/tmp/prorl_ray_${RUN_STEM}}"
+RAY_PORT="${RAY_PORT:-}"
 export HF_HOME="${WORK_ROOT}/hf-home"
 export HF_HUB_CACHE="${WORK_ROOT}/hf-hub-cache"
 export TRANSFORMERS_CACHE="${WORK_ROOT}/transformers-cache"
@@ -322,6 +323,7 @@ SAVE_DIR=${SAVE_DIR}
 SWEGYM_DATA=${SWEGYM_DATA}
 SELECTED_GPUS=${SELECTED_GPUS}
 CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}
+RAY_PORT=${RAY_PORT}
 TRAIN_GPUS=${TRAIN_GPUS}
 ROLLOUT_GPU=${ROLLOUT_GPU}
 NUM_ROLLOUT=${NUM_ROLLOUT:-4}
@@ -403,10 +405,24 @@ if [ "${PRORL_KILL_STALE_RAY_PROCESSES}" = "1" ]; then
     pkill -u "$(id -un)" -f "sglang.launch_server|sglang.srt|train_async.py" >/dev/null 2>&1 || true
     sleep 3
 fi
+if [ -z "${RAY_PORT}" ]; then
+    RAY_PORT="$("${PYTHON_BIN}" - <<'PY'
+import socket
+
+sock = socket.socket()
+sock.bind(("127.0.0.1", 0))
+print(sock.getsockname()[1])
+sock.close()
+PY
+)"
+fi
+RAY_ADDRESS_URI="127.0.0.1:${RAY_PORT}"
+echo "Starting Ray at ${RAY_ADDRESS_URI} with CUDA_VISIBLE_DEVICES=${SELECTED_GPUS}"
 RAY_START_ARGS=(
     start
     --head
     --node-ip-address 127.0.0.1
+    --port "${RAY_PORT}"
     --num-gpus "$(echo "${SELECTED_GPUS}" | awk -F, '{print NF}')"
     --disable-usage-stats
     --include-dashboard=false
@@ -415,6 +431,23 @@ if [ -n "${RAY_NUM_CPUS:-}" ]; then
     RAY_START_ARGS+=(--num-cpus "${RAY_NUM_CPUS}")
 fi
 CUDA_VISIBLE_DEVICES="${SELECTED_GPUS}" "${RAY_BIN}" "${RAY_START_ARGS[@]}"
+
+CUDA_VISIBLE_DEVICES="${SELECTED_GPUS}" RAY_ADDRESS="${RAY_ADDRESS_URI}" "${PYTHON_BIN}" - <<PY
+import ray
+
+expected = len([x for x in "${SELECTED_GPUS}".split(",") if x.strip()])
+ray.init(address="${RAY_ADDRESS_URI}", ignore_reinit_error=True)
+resources = ray.cluster_resources()
+actual = int(resources.get("GPU", 0))
+ray.shutdown()
+if actual != expected:
+    raise SystemExit(
+        f"Ray GPU resource mismatch: expected {expected} from "
+        f"SELECTED_GPUS=${SELECTED_GPUS}, got {actual}. "
+        "Refusing to launch because this may attach to the wrong Ray cluster."
+    )
+print(f"Ray GPU preflight OK: {actual} GPU(s) at ${RAY_ADDRESS_URI}")
+PY
 
 NUM_ROLLOUT="${NUM_ROLLOUT:-4}"
 ROLLOUT_BATCH_SIZE="${ROLLOUT_BATCH_SIZE:-1}"
@@ -491,7 +524,7 @@ fi
 rm -rf "${SAVE_DIR}"
 
 set +e
-CUDA_VISIBLE_DEVICES="${SELECTED_GPUS}" RAY_ADDRESS=auto "${PYTHON_BIN}" "${SLIME_DIR}/train_async.py" \
+CUDA_VISIBLE_DEVICES="${SELECTED_GPUS}" RAY_ADDRESS="${RAY_ADDRESS_URI}" "${PYTHON_BIN}" "${SLIME_DIR}/train_async.py" \
     --actor-num-nodes 1 \
     --actor-num-gpus-per-node 2 \
     --rollout-num-gpus 1 \
