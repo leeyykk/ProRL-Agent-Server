@@ -11,6 +11,7 @@ PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 SLIME_DIR="${1:-${SLIME_DIR:-${PROJECT_ROOT}/slime}}"
 PATCH_FILES=(
     "${SCRIPT_DIR}/slime_polar_async.patch"
+    "${SCRIPT_DIR}/slime_qwen35_local_conversion.patch"
 )
 
 if [ ! -d "${SLIME_DIR}/.git" ]; then

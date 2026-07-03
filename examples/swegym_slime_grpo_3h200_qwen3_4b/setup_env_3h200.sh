@@ -134,6 +134,7 @@ uv pip install --python "${VENV_DIR}/bin/python" \
     --no-deps
 uv pip install --python "${VENV_DIR}/bin/python" "numpy<2"
 uv pip install --python "${VENV_DIR}/bin/python" "scipy<1.17"
+uv pip install --python "${VENV_DIR}/bin/python" "flash-linear-attention~=0.3.2"
 
 bash "${PROJECT_ROOT}/scripts/patch/patch_slime.sh" "${SLIME_DIR}"
 apply_git_patch \

@@ -1,0 +1,63 @@
+diff --git a/slime_plugins/mbridge/qwen3_5.py b/slime_plugins/mbridge/qwen3_5.py
+index 1f2ee73..86453b4 100644
+--- a/slime_plugins/mbridge/qwen3_5.py
++++ b/slime_plugins/mbridge/qwen3_5.py
+@@ -194,6 +194,12 @@ class Qwen3_5Bridge(Qwen2MoEBridge):
+         """Override to handle MTP layer mappings."""
+         if "mtp" in mcore_weights_name:
+             return self._convert_mtp_param(mcore_weights_name)
++        if ".input_layernorm.weight" in mcore_weights_name:
++            layer_number = mcore_weights_name.split(".")[2]
++            return [f"model.language_model.layers.{layer_number}.input_layernorm.weight"]
++        if ".pre_mlp_layernorm.weight" in mcore_weights_name:
++            layer_number = mcore_weights_name.split(".")[2]
++            return [f"model.language_model.layers.{layer_number}.post_attention_layernorm.weight"]
+         return super()._weight_name_mapping_mcore_to_hf(mcore_weights_name)
+ 
+     def _convert_mtp_param(self, name: str) -> list[str]:
+diff --git a/slime_plugins/models/qwen3_5.py b/slime_plugins/models/qwen3_5.py
+index a796c8c..55784da 100644
+--- a/slime_plugins/models/qwen3_5.py
++++ b/slime_plugins/models/qwen3_5.py
+@@ -178,7 +178,7 @@ class Attention(HuggingfaceAttention):
+         hidden_states = self.input_layernorm(hidden_states)
+         hidden_states = self.linear_attn(
+             hidden_states=hidden_states,
+-            cu_seqlens=packed_seq_params.cu_seqlens_q,
++            cu_seqlens=packed_seq_params.cu_seqlens_q if packed_seq_params is not None else None,
+         )
+         return hidden_states
+ 
+@@ -190,12 +190,31 @@ def get_qwen3_5_spec(args, config, vp_stage):
+ 
+     # Define the decoder block spec
+     kwargs = {
+-        "use_transformer_engine": True,
++        "use_transformer_engine": args.transformer_impl == "transformer_engine",
+     }
+     if vp_stage is not None:
+         kwargs["vp_stage"] = vp_stage
+     transformer_layer_spec = get_gpt_decoder_block_spec(config, **kwargs)
+ 
++    if (
++        args.transformer_impl == "local"
++        and getattr(args, "context_parallel_size", 1) > 1
++        and getattr(args, "qkv_format", None) == "thd"
++    ):
++        try:
++            from megatron.core.extensions.transformer_engine import TEDotProductAttention
++        except ImportError as exc:
++            raise ImportError(
++                "Qwen3.5 CP with qkv_format=thd requires Transformer Engine "
++                "for packed-sequence full attention."
++            ) from exc
++
++        for layer_spec in transformer_layer_spec.layer_specs:
++            self_attention = getattr(layer_spec.submodules, "self_attention", None)
++            self_attention_submodules = getattr(self_attention, "submodules", None)
++            if self_attention_submodules is not None and hasattr(self_attention_submodules, "core_attention"):
++                self_attention_submodules.core_attention = TEDotProductAttention
++
+     assert config.pipeline_model_parallel_layout is None, "not support this at the moment"
+ 
+     # Slice the layer specs to only include the layers that are built in this pipeline stage.
