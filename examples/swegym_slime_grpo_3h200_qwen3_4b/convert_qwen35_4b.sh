@@ -15,7 +15,8 @@ TP_SIZE="${TP_SIZE:-1}"
 PP_SIZE="${PP_SIZE:-1}"
 CP_SIZE="${CP_SIZE:-1}"
 NPROC_PER_NODE="${NPROC_PER_NODE:-$((TP_SIZE * PP_SIZE * CP_SIZE))}"
-TRANSFORMER_IMPL="${TRANSFORMER_IMPL:-local}"
+CONVERT_TRANSFORMER_IMPL="${CONVERT_TRANSFORMER_IMPL:-local}"
+TRANSFORMER_IMPL="${CONVERT_TRANSFORMER_IMPL}"
 
 export TMPDIR="${WORK_ROOT}/tmp"
 export TEMP="${TMPDIR}"
@@ -62,6 +63,15 @@ sed -i \
         args.decoder_last_pipeline_num_layers = None' \
     "${CONVERT_TOOL}"
 
+PATCHED_PLUGIN_DIR="${TMPDIR}/slime_plugins/models"
+mkdir -p "${PATCHED_PLUGIN_DIR}"
+touch "${TMPDIR}/slime_plugins/__init__.py" "${PATCHED_PLUGIN_DIR}/__init__.py"
+cp "${SLIME_DIR}/slime_plugins/models/hf_attention.py" "${PATCHED_PLUGIN_DIR}/hf_attention.py"
+sed \
+    's/"use_transformer_engine": args.transformer_impl == "transformer_engine"/"use_transformer_engine": False/' \
+    "${SLIME_DIR}/slime_plugins/models/qwen3_5.py" \
+    > "${PATCHED_PLUGIN_DIR}/qwen3_5.py"
+
 # Mirrors slime/slime/scripts/models/qwen3.5-4B.sh. Qwen3.5-4B is a
 # Qwen3_5ForConditionalGeneration checkpoint with nested text weights and a
 # hybrid GatedDeltaNet/full-attention layout, so it must use the Qwen3.5 spec.
@@ -92,7 +102,7 @@ echo "Conversion parallelism: TP_SIZE=${TP_SIZE} PP_SIZE=${PP_SIZE} CP_SIZE=${CP
 CUDA_DEVICE_MAX_CONNECTIONS=1 \
 SLIME_CONVERT_AUTO_PIPELINE=0 \
 SLIME_FORCE_PIPELINE_MODEL_PARALLEL_SIZE="${PP_SIZE}" \
-PYTHONPATH="${MEGATRON_DIR}:${SLIME_DIR}:${PROJECT_ROOT}/src" \
+PYTHONPATH="${TMPDIR}:${MEGATRON_DIR}:${SLIME_DIR}:${PROJECT_ROOT}/src" \
 "${PYTHON_BIN}" -m torch.distributed.run --nproc_per_node "${NPROC_PER_NODE}" \
     "${CONVERT_TOOL}" \
     "${MODEL_ARGS[@]}" \
