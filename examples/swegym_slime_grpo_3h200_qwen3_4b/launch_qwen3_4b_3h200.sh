@@ -79,12 +79,32 @@ if [ -d "${NVIDIA_SITE_PACKAGES}" ]; then
     fi
 fi
 export CUDA_DEVICE_MAX_CONNECTIONS=1
-export PYTHONPATH="${MEGATRON_DIR}:${SLIME_DIR}:${PROJECT_ROOT}/src"
+PRORL_PROCESS_NAME="${PRORL_PROCESS_NAME:-}"
+PROCESS_TITLE_PYTHONPATH=""
+if [ -n "${PRORL_PROCESS_NAME}" ]; then
+    PROCESS_TITLE_PYTHONPATH="${RUN_DIR}/runtime/process_title"
+fi
+export PYTHONPATH="${PROCESS_TITLE_PYTHONPATH:+${PROCESS_TITLE_PYTHONPATH}:}${MEGATRON_DIR}:${SLIME_DIR}:${PROJECT_ROOT}/src"
 
 mkdir -p "${RUN_DIR}/logs" "${TMPDIR}" "${RAY_TMPDIR}" "${HF_HOME}" \
     "${HF_HUB_CACHE}" "${TRANSFORMERS_CACHE}" "${PYTHONPYCACHEPREFIX}" \
     "${FLASHINFER_WORKSPACE_BASE}" "${MPLCONFIGDIR}" "${WANDB_DIR}" \
     "${POLAR_SESSION_BASE_DIR}"
+if [ -n "${PRORL_PROCESS_NAME}" ]; then
+    mkdir -p "${PROCESS_TITLE_PYTHONPATH}"
+    cat > "${PROCESS_TITLE_PYTHONPATH}/sitecustomize.py" <<'PY'
+import os
+
+name = os.environ.get("PRORL_PROCESS_NAME")
+if name:
+    try:
+        from setproctitle import setproctitle
+
+        setproctitle(name)
+    except Exception:
+        pass
+PY
+fi
 
 if [ ! -x "${PYTHON_BIN}" ]; then
     echo "ERROR: Python env not found: ${PYTHON_BIN}" >&2

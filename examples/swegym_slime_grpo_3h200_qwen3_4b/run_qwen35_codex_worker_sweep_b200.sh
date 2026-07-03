@@ -13,6 +13,7 @@ SWEGYM_DATA="${SWEGYM_DATA:-}"
 TORCH_DIST_DIR="${TORCH_DIST_DIR:-}"
 PREINSTALLED_AGENT_CLI="${PREINSTALLED_AGENT_CLI:-}"
 RUNTIME_BACKEND="${RUNTIME_BACKEND:-docker}"
+PRORL_PROCESS_NAME="${PRORL_PROCESS_NAME:-via-experiment}"
 TRAIN_GPUS="${TRAIN_GPUS:-}"
 ROLLOUT_GPU="${ROLLOUT_GPU:-}"
 SWEEP_ID="${SWEEP_ID:-}"
@@ -70,6 +71,7 @@ Options:
   --torch-dist-dir PATH
   --preinstalled-agent-cli PATH
   --runtime-backend docker|apptainer
+  --process-name NAME    Process title for nvidia-smi/ps. Default: via-experiment
   --train-gpus CSV       Example: 4,6
   --rollout-gpu GPU      Example: 1
   --num-rollout N
@@ -91,6 +93,7 @@ while [ "$#" -gt 0 ]; do
         --torch-dist-dir) TORCH_DIST_DIR="$2"; shift 2 ;;
         --preinstalled-agent-cli) PREINSTALLED_AGENT_CLI="$2"; shift 2 ;;
         --runtime-backend) RUNTIME_BACKEND="$2"; shift 2 ;;
+        --process-name) PRORL_PROCESS_NAME="$2"; shift 2 ;;
         --train-gpus) TRAIN_GPUS="$2"; shift 2 ;;
         --rollout-gpu) ROLLOUT_GPU="$2"; shift 2 ;;
         --sweep-id) SWEEP_ID="$2"; shift 2 ;;
@@ -233,6 +236,7 @@ for config in "${CONFIGS[@]}"; do
         AGENT_HARNESS=codex \
         PREINSTALLED_AGENT_CLI="${PREINSTALLED_AGENT_CLI}" \
         RUNTIME_BACKEND="${RUNTIME_BACKEND}" \
+        PRORL_PROCESS_NAME="${PRORL_PROCESS_NAME}" \
         AGENT_NPM_PACKAGE="@openai/codex@0.121.0" \
         SAVE_INTERVAL=1000000 \
         KEEP_CHECKPOINTS=0 \
