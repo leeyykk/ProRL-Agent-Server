@@ -63,6 +63,7 @@ export MPLCONFIGDIR="${RUN_DIR}/runtime/mplconfig"
 export WANDB_DIR="${RUN_DIR}/wandb"
 export POLAR_SESSION_BASE_DIR="${POLAR_SESSION_BASE_DIR:-${RUN_DIR}/runtime/polar_session_dirs}"
 export POLAR_PRESERVE_SESSION_DIRS="${POLAR_PRESERVE_SESSION_DIRS:-0}"
+export PRORL_KILL_STALE_RAY_PROCESSES="${PRORL_KILL_STALE_RAY_PROCESSES:-0}"
 export POLAR_MAX_COMPLETION_TOKENS="${POLAR_MAX_COMPLETION_TOKENS:-1024}"
 export SGLANG_ENABLE_JIT_DEEPGEMM="${SGLANG_ENABLE_JIT_DEEPGEMM:-0}"
 export SGLANG_BATCH_INVARIANT_OPS_ENABLE_MM_DEEPGEMM="${SGLANG_BATCH_INVARIANT_OPS_ENABLE_MM_DEEPGEMM:-0}"
@@ -395,6 +396,13 @@ for url in ("http://127.0.0.1:48080/health", "http://127.0.0.1:48100/health"):
 PY
 
 "${RAY_BIN}" stop --force >/dev/null 2>&1 || true
+if [ "${PRORL_KILL_STALE_RAY_PROCESSES}" = "1" ]; then
+    pkill -u "$(id -un)" -f "ray::WorkerDict" >/dev/null 2>&1 || true
+    pkill -u "$(id -un)" -f "ray::SGLangEngine" >/dev/null 2>&1 || true
+    pkill -u "$(id -un)" -f "ray::RolloutManager" >/dev/null 2>&1 || true
+    pkill -u "$(id -un)" -f "sglang.launch_server|sglang.srt|train_async.py" >/dev/null 2>&1 || true
+    sleep 3
+fi
 RAY_START_ARGS=(
     start
     --head
@@ -406,7 +414,7 @@ RAY_START_ARGS=(
 if [ -n "${RAY_NUM_CPUS:-}" ]; then
     RAY_START_ARGS+=(--num-cpus "${RAY_NUM_CPUS}")
 fi
-"${RAY_BIN}" "${RAY_START_ARGS[@]}"
+CUDA_VISIBLE_DEVICES="${SELECTED_GPUS}" "${RAY_BIN}" "${RAY_START_ARGS[@]}"
 
 NUM_ROLLOUT="${NUM_ROLLOUT:-4}"
 ROLLOUT_BATCH_SIZE="${ROLLOUT_BATCH_SIZE:-1}"
@@ -483,7 +491,7 @@ fi
 rm -rf "${SAVE_DIR}"
 
 set +e
-RAY_ADDRESS=auto "${PYTHON_BIN}" "${SLIME_DIR}/train_async.py" \
+CUDA_VISIBLE_DEVICES="${SELECTED_GPUS}" RAY_ADDRESS=auto "${PYTHON_BIN}" "${SLIME_DIR}/train_async.py" \
     --actor-num-nodes 1 \
     --actor-num-gpus-per-node 2 \
     --rollout-num-gpus 1 \
