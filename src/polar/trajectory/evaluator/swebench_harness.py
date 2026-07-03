@@ -32,7 +32,10 @@ not installed); ``resolved=True`` → ``outcome_reward=1.0``.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+import json
 from pathlib import Path
+import shlex
 from typing import Any
 
 from polar.runtime.base import BaseRuntime
@@ -105,12 +108,19 @@ class SwebenchHarnessEvaluator(BasePatchEvaluator):
 
         combined_path.write_text((result.stdout or "") + (result.stderr or ""))
         prediction = {"model_patch": patch, "instance_id": instance_id}
-        grading_report = _grade_harness_run(
-            get_eval_report,
-            test_spec=test_spec,
-            prediction=prediction,
-            log_path=combined_path,
-        )
+        if get_eval_report is None:
+            grading_report = _grade_simple_swegym_run(
+                test_spec=test_spec,
+                prediction=prediction,
+                return_code=result.return_code,
+            )
+        else:
+            grading_report = _grade_harness_run(
+                get_eval_report,
+                test_spec=test_spec,
+                prediction=prediction,
+                log_path=combined_path,
+            )
         report = grading_report[instance_id]
         return (
             {
@@ -126,17 +136,133 @@ class SwebenchHarnessEvaluator(BasePatchEvaluator):
         )
 
 
+@dataclass(frozen=True)
+class _SimpleSweGymSpec:
+    """Minimal SWE-Gym test spec for repos unsupported by PyPI swebench."""
+
+    instance_id: str
+    repo: str
+    version: str
+    FAIL_TO_PASS: list[str]
+    PASS_TO_PASS: list[str]
+    test_patch: str
+
+    @property
+    def eval_script(self) -> str:
+        tests = self.FAIL_TO_PASS + self.PASS_TO_PASS
+        tests_arg = " ".join(shlex.quote(test) for test in tests)
+        pytest_command = f"python -m pytest -q {tests_arg}" if tests_arg else "python -m pytest -q"
+        patch = self.test_patch.rstrip("\n")
+        return "\n".join(
+            [
+                "#!/bin/bash",
+                "set -uxo pipefail",
+                "cd /testbed",
+                "cat > /tmp/polar_swegym_test.patch <<'POLAR_SWEGYM_TEST_PATCH'",
+                patch,
+                "POLAR_SWEGYM_TEST_PATCH",
+                "if [ -s /tmp/polar_swegym_test.patch ]; then",
+                "  if git apply -v /tmp/polar_swegym_test.patch; then",
+                "    echo __POLAR_SIMPLE_SWEGYM_TEST_PATCH_APPLY=git_apply__",
+                "  elif patch --batch --fuzz=5 -p1 -i /tmp/polar_swegym_test.patch; then",
+                "    echo __POLAR_SIMPLE_SWEGYM_TEST_PATCH_APPLY=patch__",
+                "  else",
+                "    echo __POLAR_SIMPLE_SWEGYM_TEST_PATCH_APPLY=failed__",
+                "    exit 2",
+                "  fi",
+                "fi",
+                "set +e",
+                pytest_command,
+                "status=$?",
+                'echo "__POLAR_SIMPLE_SWEGYM_PYTEST_STATUS=${status}__"',
+                "exit ${status}",
+                "",
+            ]
+        )
+
+
 def _load_harness(instance: dict[str, Any]) -> tuple[Any, Any]:
     try:
         from swegym.harness.grading import get_eval_report
         from swegym.harness.test_spec import make_test_spec
+        return make_test_spec(instance), get_eval_report
     except ModuleNotFoundError:
+        pass
+    except KeyError:
+        fallback_spec = _maybe_simple_swegym_spec(instance)
+        if fallback_spec is not None:
+            return fallback_spec, None
+        raise
+
+    try:
         from swebench.harness.grading import get_eval_report
         try:
             from swebench.harness.test_spec.test_spec import make_test_spec
         except ModuleNotFoundError:
             from swebench.harness.test_spec import make_test_spec
-    return make_test_spec(instance), get_eval_report
+        return make_test_spec(instance), get_eval_report
+    except KeyError:
+        fallback_spec = _maybe_simple_swegym_spec(instance)
+        if fallback_spec is not None:
+            return fallback_spec, None
+        raise
+    except ModuleNotFoundError:
+        fallback_spec = _maybe_simple_swegym_spec(instance)
+        if fallback_spec is not None:
+            return fallback_spec, None
+        raise
+
+
+def _maybe_simple_swegym_spec(instance: dict[str, Any]) -> _SimpleSweGymSpec | None:
+    test_patch = instance.get("test_patch")
+    if not test_patch:
+        return None
+    fail_to_pass = _instance_list(instance, "FAIL_TO_PASS")
+    pass_to_pass = _instance_list(instance, "PASS_TO_PASS")
+    if not fail_to_pass and not pass_to_pass:
+        return None
+    return _SimpleSweGymSpec(
+        instance_id=str(instance["instance_id"]).lower(),
+        repo=str(instance.get("repo", "")),
+        version=str(instance.get("version", instance.get("base_commit", ""))),
+        FAIL_TO_PASS=fail_to_pass,
+        PASS_TO_PASS=pass_to_pass,
+        test_patch=str(test_patch),
+    )
+
+
+def _instance_list(instance: dict[str, Any], key: str) -> list[str]:
+    value = instance.get(key) or []
+    if isinstance(value, str):
+        value = json.loads(value)
+    return [str(item) for item in value]
+
+
+def _grade_simple_swegym_run(
+    *,
+    test_spec: _SimpleSweGymSpec,
+    prediction: dict[str, Any],
+    return_code: int,
+) -> dict[str, Any]:
+    instance_id = str(prediction["instance_id"])
+    resolved = return_code == 0
+    return {
+        instance_id: {
+            "patch_exists": bool(prediction.get("model_patch")),
+            "patch_successfully_applied": True,
+            "resolved": resolved,
+            "tests_status": {
+                "FAIL_TO_PASS": {
+                    "success": test_spec.FAIL_TO_PASS if resolved else [],
+                    "failure": [] if resolved else test_spec.FAIL_TO_PASS,
+                },
+                "PASS_TO_PASS": {
+                    "success": test_spec.PASS_TO_PASS if resolved else [],
+                    "failure": [] if resolved else test_spec.PASS_TO_PASS,
+                },
+            },
+        }
+    }
 
 
 def _grade_harness_run(

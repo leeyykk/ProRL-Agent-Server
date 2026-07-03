@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from polar.rollout.models import SessionTiming
 
@@ -19,10 +20,13 @@ class StageTimer:
     """Record monotonic timestamps for session stages."""
 
     _marks: dict[str, float] = field(default_factory=dict)
+    _wall_marks: dict[str, str] = field(default_factory=dict)
 
     def mark(self, stage: str, event: str) -> None:
         """Mark a stage start or finish."""
-        self._marks[f"{stage}_{event}"] = time.monotonic()
+        key = f"{stage}_{event}"
+        self._marks[key] = time.monotonic()
+        self._wall_marks[key] = datetime.now(timezone.utc).isoformat()
 
     def to_session_timing(self) -> SessionTiming:
         """Return durations for the init/run/post-run lifecycle."""
@@ -46,6 +50,13 @@ class StageTimer:
         if started is None or finished is None:
             return 0.0
         return max(0.0, (finished - started) * 1000.0)
+
+    def timing_marks(self) -> dict[str, dict[str, object]]:
+        """Return exact stage marks for post-run characterization plots."""
+        return {
+            "monotonic": dict(self._marks),
+            "utc": dict(self._wall_marks),
+        }
 
     def _postrun_span_ms(self) -> float:
         """Earliest postrun-family started to latest postrun-family finished."""

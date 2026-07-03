@@ -144,6 +144,19 @@ class GatewayNodeManager:
                     await self._register_with_rollout_server()
                     continue
                 response.raise_for_status()
+                logger.info(
+                    "Gateway heartbeat sent node_id=%s init_queue=%s init_inflight=%s "
+                    "ready=%s run_inflight=%s postrun_queue=%s postrun_inflight=%s "
+                    "total_sessions=%s",
+                    self.node_id,
+                    metrics.init_queue_depth,
+                    metrics.init_inflight,
+                    metrics.ready_depth,
+                    metrics.run_inflight,
+                    metrics.postrun_queue_depth,
+                    metrics.postrun_inflight,
+                    metrics.total_sessions,
+                )
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -538,11 +551,21 @@ class GatewayNodeManager:
                 "post-run finished without producing a session result",
             )
         try:
+            metadata = {
+                **dict(result.metadata),
+                "timing_marks": managed.timer.timing_marks(),
+                "worker_limits": {
+                    "max_init_workers": self.max_init_workers,
+                    "max_run_workers": self.max_run_workers,
+                    "max_postrun_workers": self.max_postrun_workers,
+                },
+            }
             normalized = result.model_copy(
                 update={
                     "timing": managed.timer.to_session_timing(),
                     "node_id": self.node_id,
                     "error": result.error or result.trajectory.error,
+                    "metadata": metadata,
                 }
             )
             self.session_registry.set_result(request.session_id, normalized)

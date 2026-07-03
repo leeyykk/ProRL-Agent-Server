@@ -13,7 +13,8 @@ MEGATRON_DIR="${MEGATRON_DIR:-${PROJECT_ROOT}/Megatron-LM}"
 SLIME_REPO="${SLIME_REPO:-https://github.com/THUDM/slime.git}"
 SLIME_REF="${SLIME_REF:-v0.2.4}"
 MEGATRON_REPO="${MEGATRON_REPO:-https://github.com/NVIDIA/Megatron-LM.git}"
-MEGATRON_REF="${MEGATRON_REF:-main}"
+MEGATRON_REF="${MEGATRON_REF:-3714d81d418c9f1bca4594fc35f9e8289f652862}"
+MEGATRON_PATCH_VERSION="${MEGATRON_PATCH_VERSION:-v0.5.9}"
 
 export TMPDIR="${WORK_ROOT}/tmp"
 export TEMP="${TMPDIR}"
@@ -50,6 +51,44 @@ clone_if_missing() {
     git clone --branch "${ref}" --depth 1 "${repo}" "${dest}"
 }
 
+ensure_git_commit() {
+    local name="$1" repo="$2" ref="$3" dest="$4"
+    if [ ! -d "${dest}/.git" ]; then
+        git clone --depth 1 "${repo}" "${dest}"
+    fi
+    local current
+    current="$(git -C "${dest}" rev-parse HEAD)"
+    if [ "${current}" = "${ref}" ]; then
+        echo "${name} checkout is pinned: ${dest} @ ${ref}"
+        return
+    fi
+    if ! git -C "${dest}" diff --quiet || ! git -C "${dest}" diff --cached --quiet; then
+        echo "ERROR: ${name} checkout is dirty and not at required ref ${ref}: ${dest}" >&2
+        echo "       Please move or clean that dependency checkout, then rerun setup." >&2
+        exit 1
+    fi
+    echo "Updating ${name} checkout to required ref ${ref}: ${dest}"
+    git -C "${dest}" fetch --depth 1 origin "${ref}"
+    git -C "${dest}" checkout --detach FETCH_HEAD
+}
+
+apply_git_patch() {
+    local name="$1" dest="$2" patch_file="$3"
+    if git -C "${dest}" apply --check "${patch_file}" 2>/dev/null; then
+        echo "Applying ${name} patch: ${patch_file}"
+        git -C "${dest}" apply "${patch_file}"
+    elif git -C "${dest}" apply --reverse --check "${patch_file}" 2>/dev/null; then
+        echo "${name} patch already applied: ${patch_file}"
+    else
+        echo "Applying ${name} patch with 3-way merge: ${patch_file}"
+        git -C "${dest}" apply --3way "${patch_file}"
+        if grep -R -n '^<<<<<<< ' "${dest}"; then
+            echo "ERROR: ${name} patch left merge conflicts in ${dest}" >&2
+            exit 1
+        fi
+    fi
+}
+
 require_cmd git
 require_cmd python3
 
@@ -63,13 +102,23 @@ if [ ! -x "${VENV_DIR}/bin/python" ]; then
 fi
 
 clone_if_missing "Slime" "${SLIME_REPO}" "${SLIME_REF}" "${SLIME_DIR}"
-clone_if_missing "Megatron-LM" "${MEGATRON_REPO}" "${MEGATRON_REF}" "${MEGATRON_DIR}"
+ensure_git_commit "Megatron-LM" "${MEGATRON_REPO}" "${MEGATRON_REF}" "${MEGATRON_DIR}"
 
-uv pip install --python "${VENV_DIR}/bin/python" -e .
+uv pip install --python "${VENV_DIR}/bin/python" -e ".[swebench]"
 uv pip install --python "${VENV_DIR}/bin/python" -e "${SLIME_DIR}"
 uv pip install --python "${VENV_DIR}/bin/python" -e "${MEGATRON_DIR}"
+uv pip install --python "${VENV_DIR}/bin/python" --prerelease=allow "sglang[all]==0.5.10"
+uv pip install --python "${VENV_DIR}/bin/python" \
+    "mbridge @ git+https://github.com/ISEEKYAN/mbridge.git@89eb10887887bc74853f89a4de258c0702932a1c" \
+    --no-deps
+uv pip install --python "${VENV_DIR}/bin/python" "numpy<2"
+uv pip install --python "${VENV_DIR}/bin/python" "scipy<1.17"
 
 bash "${PROJECT_ROOT}/scripts/patch/patch_slime.sh" "${SLIME_DIR}"
+apply_git_patch \
+    "Slime Megatron compatibility" \
+    "${MEGATRON_DIR}" \
+    "${SLIME_DIR}/docker/patch/${MEGATRON_PATCH_VERSION}/megatron.patch"
 bash "${PROJECT_ROOT}/scripts/patch/patch_sglang.sh"
 
 echo "Environment ready:"
@@ -78,4 +127,3 @@ echo "  work root:  ${WORK_ROOT}"
 echo "  run root:   ${RUN_ROOT}"
 echo "  slime:      ${SLIME_DIR}"
 echo "  megatron:   ${MEGATRON_DIR}"
-
