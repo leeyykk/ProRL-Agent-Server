@@ -35,6 +35,7 @@ bash examples/swegym_slime_grpo_3h200_qwen3_4b/setup_fresh_b200.sh \
   --swegym-data /work1/$USER/prorl_agent_server_env/data/swegym_train_docker_b200.jsonl \
   --swegym-max-tasks 24 \
   --torch-dist-dir /work1/$USER/prorl_agent_server_env/checkpoints/Qwen3.5-4B_torch_dist_tp2 \
+  --python-version 3.12 \
   --tp-size 2
 ```
 
@@ -48,6 +49,17 @@ This does the following:
 - builds the SWE-Gym Docker runtime images and JSONL
 - preinstalls Codex CLI to a host prefix that is mounted into containers
 - converts Qwen3.5-4B to Megatron `torch_dist` with TP=2
+
+The setup intentionally uses Python 3.12. If the machine's `python3` is 3.13
+and an old `.venv` was already created, SGLang may fail while building
+`outlines-core` with `error: can't find Rust compiler`. That is usually a
+Python-wheel mismatch, not a request to install Rust. Remove the stale venv and
+rerun:
+
+```bash
+rm -rf .venv
+bash examples/swegym_slime_grpo_3h200_qwen3_4b/setup_fresh_b200.sh ... --python-version 3.12
+```
 
 If some artifacts already exist, use skip flags:
 

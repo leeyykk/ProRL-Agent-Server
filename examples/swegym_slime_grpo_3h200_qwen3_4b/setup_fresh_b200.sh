@@ -18,6 +18,7 @@ TP_SIZE="${TP_SIZE:-2}"
 PP_SIZE="${PP_SIZE:-1}"
 CP_SIZE="${CP_SIZE:-1}"
 TRANSFORMER_IMPL="${TRANSFORMER_IMPL:-transformer_engine}"
+PYTHON_VERSION="${PYTHON_VERSION:-3.12}"
 PREINSTALLED_AGENT_CLI="${PREINSTALLED_AGENT_CLI:-}"
 AGENT_NPM_PACKAGE="${AGENT_NPM_PACKAGE:-@openai/codex@0.121.0}"
 SKIP_ENV="${SKIP_ENV:-0}"
@@ -48,6 +49,7 @@ Common options:
   --torch-dist-dir PATH   Converted Megatron checkpoint path.
                           Default: WORK_ROOT/checkpoints/Qwen3.5-4B_torch_dist_tp2
   --tp-size N             Tensor parallel size for conversion/training. Default: 2
+  --python-version X.Y    Python minor version for the venv. Default: 3.12
   --preinstalled-agent-cli PATH
                           Prefix dir where Codex CLI is installed/read from.
                           Default: WORK_ROOT/agent_cli/codex_0.121.0
@@ -76,6 +78,7 @@ while [ "$#" -gt 0 ]; do
         --pp-size) PP_SIZE="$2"; shift 2 ;;
         --cp-size) CP_SIZE="$2"; shift 2 ;;
         --transformer-impl) TRANSFORMER_IMPL="$2"; shift 2 ;;
+        --python-version) PYTHON_VERSION="$2"; shift 2 ;;
         --preinstalled-agent-cli) PREINSTALLED_AGENT_CLI="$2"; shift 2 ;;
         --agent-npm-package) AGENT_NPM_PACKAGE="$2"; shift 2 ;;
         --skip-env) SKIP_ENV=1; shift ;;
@@ -98,7 +101,7 @@ SWEGYM_DATA="${SWEGYM_DATA:-${WORK_ROOT}/data/swegym_train_docker_b200.jsonl}"
 TORCH_DIST_DIR="${TORCH_DIST_DIR:-${WORK_ROOT}/checkpoints/Qwen3.5-4B_torch_dist_tp2}"
 PREINSTALLED_AGENT_CLI="${PREINSTALLED_AGENT_CLI:-${WORK_ROOT}/agent_cli/codex_0.121.0}"
 
-export WORK_ROOT RUN_ROOT
+export WORK_ROOT RUN_ROOT PYTHON_VERSION
 export TMPDIR="${WORK_ROOT}/tmp"
 export TEMP="${TMPDIR}"
 export TMP="${TMPDIR}"
@@ -117,7 +120,7 @@ mkdir -p "${WORK_ROOT}" "${RUN_ROOT}" "${TMPDIR}" "${UV_CACHE_DIR}" "${HF_HOME}"
     "$(dirname "${TORCH_DIST_DIR}")" "${PREINSTALLED_AGENT_CLI}"
 
 if [ "${SKIP_ENV}" != "1" ]; then
-    WORK_ROOT="${WORK_ROOT}" RUN_ROOT="${RUN_ROOT}" \
+    WORK_ROOT="${WORK_ROOT}" RUN_ROOT="${RUN_ROOT}" PYTHON_VERSION="${PYTHON_VERSION}" \
         bash "${SCRIPT_DIR}/setup_env_3h200.sh"
 fi
 

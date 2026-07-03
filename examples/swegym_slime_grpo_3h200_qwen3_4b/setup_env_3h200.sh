@@ -8,6 +8,8 @@ cd "${PROJECT_ROOT}"
 WORK_ROOT="${WORK_ROOT:-/work1/yokyung/prorl_agent_server_env}"
 RUN_ROOT="${RUN_ROOT:-/home/yokyung/prorl_agent_server_runs/swegym_slime_grpo_3h200}"
 VENV_DIR="${VENV_DIR:-${PROJECT_ROOT}/.venv}"
+PYTHON_VERSION="${PYTHON_VERSION:-3.12}"
+PYTHON_BOOTSTRAP="${PYTHON_BOOTSTRAP:-python3}"
 SLIME_DIR="${SLIME_DIR:-${PROJECT_ROOT}/slime}"
 MEGATRON_DIR="${MEGATRON_DIR:-${PROJECT_ROOT}/Megatron-LM}"
 SLIME_REPO="${SLIME_REPO:-https://github.com/THUDM/slime.git}"
@@ -90,15 +92,34 @@ apply_git_patch() {
 }
 
 require_cmd git
-require_cmd python3
+require_cmd "${PYTHON_BOOTSTRAP}"
 
 if ! command -v uv >/dev/null 2>&1; then
-    python3 -m pip install --user uv
+    "${PYTHON_BOOTSTRAP}" -m pip install --user uv
 fi
 require_cmd uv
 
 if [ ! -x "${VENV_DIR}/bin/python" ]; then
-    uv venv "${VENV_DIR}" --python python3
+    uv venv "${VENV_DIR}" --python "${PYTHON_VERSION}"
+fi
+
+actual_python_version="$("${VENV_DIR}/bin/python" - <<'PY'
+import sys
+print(f"{sys.version_info.major}.{sys.version_info.minor}")
+PY
+)"
+if [ "${actual_python_version}" != "${PYTHON_VERSION}" ]; then
+    cat >&2 <<EOF
+ERROR: ${VENV_DIR} uses Python ${actual_python_version}, but this setup expects Python ${PYTHON_VERSION}.
+
+Remove the stale venv and rerun setup, for example:
+  rm -rf ${VENV_DIR}
+  PYTHON_VERSION=${PYTHON_VERSION} bash ${BASH_SOURCE[0]}
+
+This matters because several ML wheels used by SGLang/Megatron are not reliably
+available for newer Python versions.
+EOF
+    exit 1
 fi
 
 clone_if_missing "Slime" "${SLIME_REPO}" "${SLIME_REF}" "${SLIME_DIR}"
