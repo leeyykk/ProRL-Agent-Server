@@ -135,7 +135,10 @@ uv pip install --python "${VENV_DIR}/bin/python" \
 uv pip install --python "${VENV_DIR}/bin/python" "numpy<2"
 uv pip install --python "${VENV_DIR}/bin/python" "scipy<1.17"
 uv pip install --python "${VENV_DIR}/bin/python" "flash-linear-attention~=0.3.2"
-uv pip install --python "${VENV_DIR}/bin/python" "nvidia-cuda-nvrtc-cu12"
+uv pip install --python "${VENV_DIR}/bin/python" \
+    "nvidia-cuda-runtime-cu12" \
+    "nvidia-cuda-nvrtc-cu12" \
+    "nvidia-cublas-cu12"
 
 bash "${PROJECT_ROOT}/scripts/patch/patch_slime.sh" "${SLIME_DIR}"
 apply_git_patch \
