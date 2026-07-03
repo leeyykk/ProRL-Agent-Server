@@ -68,9 +68,13 @@ mkdir -p "${PATCHED_PLUGIN_DIR}"
 touch "${TMPDIR}/slime_plugins/__init__.py" "${PATCHED_PLUGIN_DIR}/__init__.py"
 cp "${SLIME_DIR}/slime_plugins/models/hf_attention.py" "${PATCHED_PLUGIN_DIR}/hf_attention.py"
 sed \
-    's/"use_transformer_engine": args.transformer_impl == "transformer_engine"/"use_transformer_engine": False/' \
+    's/"use_transformer_engine": .*/"use_transformer_engine": False,/' \
     "${SLIME_DIR}/slime_plugins/models/qwen3_5.py" \
     > "${PATCHED_PLUGIN_DIR}/qwen3_5.py"
+if grep -q 'args.transformer_impl == "transformer_engine"' "${PATCHED_PLUGIN_DIR}/qwen3_5.py"; then
+    echo "ERROR: failed to patch Qwen3.5 conversion plugin to local layer spec." >&2
+    exit 1
+fi
 
 # Mirrors slime/slime/scripts/models/qwen3.5-4B.sh. Qwen3.5-4B is a
 # Qwen3_5ForConditionalGeneration checkpoint with nested text weights and a
