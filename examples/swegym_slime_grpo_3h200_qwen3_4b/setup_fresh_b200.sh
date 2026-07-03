@@ -187,7 +187,7 @@ if [ "${SKIP_CONVERT}" != "1" ]; then
         TP_SIZE="${TP_SIZE}" \
         PP_SIZE="${PP_SIZE}" \
         CP_SIZE="${CP_SIZE}" \
-        NPROC_PER_NODE="${TP_SIZE}" \
+        NPROC_PER_NODE="$((TP_SIZE * PP_SIZE * CP_SIZE))" \
         TRANSFORMER_IMPL="${TRANSFORMER_IMPL}" \
         bash "${SCRIPT_DIR}/convert_qwen35_4b.sh"
 fi

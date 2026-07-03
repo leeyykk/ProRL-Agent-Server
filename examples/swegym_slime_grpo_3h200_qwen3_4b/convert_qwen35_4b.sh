@@ -14,7 +14,7 @@ PYTHON_BIN="${PYTHON_BIN:-${PROJECT_ROOT}/.venv/bin/python}"
 TP_SIZE="${TP_SIZE:-1}"
 PP_SIZE="${PP_SIZE:-1}"
 CP_SIZE="${CP_SIZE:-1}"
-NPROC_PER_NODE="${NPROC_PER_NODE:-${TP_SIZE}}"
+NPROC_PER_NODE="${NPROC_PER_NODE:-$((TP_SIZE * PP_SIZE * CP_SIZE))}"
 TRANSFORMER_IMPL="${TRANSFORMER_IMPL:-local}"
 
 export TMPDIR="${WORK_ROOT}/tmp"
@@ -34,6 +34,19 @@ if [ ! -d "${HF_CHECKPOINT}" ]; then
 fi
 if [ ! -f "${SLIME_DIR}/tools/convert_hf_to_torch_dist.py" ]; then
     echo "ERROR: Slime checkout missing: ${SLIME_DIR}" >&2
+    exit 1
+fi
+
+if [ "${NPROC_PER_NODE}" -ne "$((TP_SIZE * PP_SIZE * CP_SIZE))" ]; then
+    cat >&2 <<EOF
+ERROR: invalid conversion parallelism:
+  TP_SIZE=${TP_SIZE}
+  PP_SIZE=${PP_SIZE}
+  CP_SIZE=${CP_SIZE}
+  NPROC_PER_NODE=${NPROC_PER_NODE}
+
+NPROC_PER_NODE must equal TP_SIZE * PP_SIZE * CP_SIZE for checkpoint conversion.
+EOF
     exit 1
 fi
 
@@ -63,6 +76,7 @@ MODEL_ARGS=(
 )
 
 echo "Converting ${HF_CHECKPOINT} -> ${TORCH_DIST_DIR}"
+echo "Conversion parallelism: TP_SIZE=${TP_SIZE} PP_SIZE=${PP_SIZE} CP_SIZE=${CP_SIZE} NPROC_PER_NODE=${NPROC_PER_NODE} TRANSFORMER_IMPL=${TRANSFORMER_IMPL}"
 CUDA_DEVICE_MAX_CONNECTIONS=1 \
 PYTHONPATH="${MEGATRON_DIR}:${SLIME_DIR}:${PROJECT_ROOT}/src" \
 "${PYTHON_BIN}" -m torch.distributed.run --nproc_per_node "${NPROC_PER_NODE}" \
