@@ -133,11 +133,13 @@ fi
 if [ "${SKIP_MODEL_DOWNLOAD}" != "1" ] && [ ! -f "${HF_CHECKPOINT}/config.json" ]; then
     uv pip install --python "${PYTHON_BIN}" -U "huggingface_hub[cli]"
     HF_CLI="${PROJECT_ROOT}/.venv/bin/hf"
+    HF_CLI_KIND="hf"
     if [ ! -x "${HF_CLI}" ]; then
         HF_CLI="$(command -v hf || true)"
     fi
     if [ -z "${HF_CLI}" ]; then
         HF_CLI="${PROJECT_ROOT}/.venv/bin/huggingface-cli"
+        HF_CLI_KIND="huggingface-cli"
         if [ ! -x "${HF_CLI}" ]; then
             HF_CLI="$(command -v huggingface-cli || true)"
         fi
@@ -146,10 +148,16 @@ if [ "${SKIP_MODEL_DOWNLOAD}" != "1" ] && [ ! -f "${HF_CHECKPOINT}/config.json" 
             exit 1
         fi
     fi
-    "${HF_CLI}" download \
-        "${HF_MODEL_ID}" \
-        --local-dir "${HF_CHECKPOINT}" \
-        --local-dir-use-symlinks False
+    if [ "${HF_CLI_KIND}" = "hf" ]; then
+        "${HF_CLI}" download \
+            "${HF_MODEL_ID}" \
+            --local-dir "${HF_CHECKPOINT}"
+    else
+        "${HF_CLI}" download \
+            "${HF_MODEL_ID}" \
+            --local-dir "${HF_CHECKPOINT}" \
+            --local-dir-use-symlinks False
+    fi
 fi
 
 if [ "${SKIP_CODEX_INSTALL}" != "1" ]; then
