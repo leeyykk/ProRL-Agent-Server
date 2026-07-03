@@ -131,7 +131,7 @@ if [ ! -x "${PYTHON_BIN}" ]; then
 fi
 
 if [ "${SKIP_MODEL_DOWNLOAD}" != "1" ] && [ ! -f "${HF_CHECKPOINT}/config.json" ]; then
-    "${PYTHON_BIN}" -m pip install -q -U "huggingface_hub[cli]"
+    uv pip install --python "${PYTHON_BIN}" -U "huggingface_hub[cli]"
     HF_CLI="${PROJECT_ROOT}/.venv/bin/huggingface-cli"
     if [ ! -x "${HF_CLI}" ]; then
         HF_CLI="$(command -v huggingface-cli || true)"
