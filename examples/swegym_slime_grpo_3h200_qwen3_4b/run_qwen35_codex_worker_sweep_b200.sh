@@ -40,6 +40,7 @@ MAX_PRELAUNCH_GPU_MEM_MIB="${MAX_PRELAUNCH_GPU_MEM_MIB:-1024}"
 POLL_SECONDS="${POLL_SECONDS:-60}"
 RUN_NOW="${RUN_NOW:-0}"
 PRORL_STRICT_GPU_ISOLATION="${PRORL_STRICT_GPU_ISOLATION:-1}"
+PRORL_KILL_STALE_RAY_PROCESSES="${PRORL_KILL_STALE_RAY_PROCESSES:-0}"
 
 usage() {
     cat <<'EOF'
@@ -83,6 +84,8 @@ Options:
   --run-now              Do one preflight check and fail if resources are busy.
   --no-strict-gpu-isolation
                          Allow pre-existing GPU compute PIDs on selected GPUs.
+  --kill-stale-ray-processes
+                         Kill same-user Ray worker names before launch. Avoid on shared accounts.
 EOF
 }
 
@@ -109,6 +112,7 @@ while [ "$#" -gt 0 ]; do
         --max-prelaunch-gpu-mem-mib) MAX_PRELAUNCH_GPU_MEM_MIB="$2"; shift 2 ;;
         --run-now) RUN_NOW=1; shift ;;
         --no-strict-gpu-isolation) PRORL_STRICT_GPU_ISOLATION=0; shift ;;
+        --kill-stale-ray-processes) PRORL_KILL_STALE_RAY_PROCESSES=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "ERROR: unknown argument: $1" >&2; usage >&2; exit 2 ;;
     esac
@@ -278,7 +282,7 @@ for config in "${CONFIGS[@]}"; do
         PREINSTALLED_AGENT_CLI="${PREINSTALLED_AGENT_CLI}" \
         RUNTIME_BACKEND="${RUNTIME_BACKEND}" \
         PRORL_PROCESS_NAME="${PRORL_PROCESS_NAME}" \
-        PRORL_KILL_STALE_RAY_PROCESSES=1 \
+        PRORL_KILL_STALE_RAY_PROCESSES="${PRORL_KILL_STALE_RAY_PROCESSES}" \
         PRORL_STRICT_GPU_ISOLATION="${PRORL_STRICT_GPU_ISOLATION}" \
         AGENT_NPM_PACKAGE="@openai/codex@0.121.0" \
         SAVE_INTERVAL=1000000 \
