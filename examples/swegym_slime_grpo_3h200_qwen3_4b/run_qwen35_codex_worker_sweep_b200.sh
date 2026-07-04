@@ -39,6 +39,7 @@ HOST_MIN_AVAILABLE_GIB="${HOST_MIN_AVAILABLE_GIB:-120}"
 MAX_PRELAUNCH_GPU_MEM_MIB="${MAX_PRELAUNCH_GPU_MEM_MIB:-1024}"
 POLL_SECONDS="${POLL_SECONDS:-60}"
 RUN_NOW="${RUN_NOW:-0}"
+PRORL_STRICT_GPU_ISOLATION="${PRORL_STRICT_GPU_ISOLATION:-1}"
 
 usage() {
     cat <<'EOF'
@@ -80,6 +81,8 @@ Options:
   --host-min-available-gib N
   --max-prelaunch-gpu-mem-mib N
   --run-now              Do one preflight check and fail if resources are busy.
+  --no-strict-gpu-isolation
+                         Allow pre-existing GPU compute PIDs on selected GPUs.
 EOF
 }
 
@@ -105,6 +108,7 @@ while [ "$#" -gt 0 ]; do
         --host-min-available-gib) HOST_MIN_AVAILABLE_GIB="$2"; shift 2 ;;
         --max-prelaunch-gpu-mem-mib) MAX_PRELAUNCH_GPU_MEM_MIB="$2"; shift 2 ;;
         --run-now) RUN_NOW=1; shift ;;
+        --no-strict-gpu-isolation) PRORL_STRICT_GPU_ISOLATION=0; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "ERROR: unknown argument: $1" >&2; usage >&2; exit 2 ;;
     esac
@@ -165,10 +169,33 @@ selected_gpus() {
     printf "%s,%s" "${TRAIN_GPUS}" "${ROLLOUT_GPU}" | tr ',' '\n' | awk 'NF {gsub(/ /,""); if (!seen[$0]++) print $0}'
 }
 
+selected_gpu_compute_processes() {
+    local selected_csv
+    selected_csv="$(selected_gpus | paste -sd, -)"
+    nvidia-smi --query-gpu=index,uuid --format=csv,noheader \
+        | awk -F, -v selected="${selected_csv}" '
+            BEGIN {
+                split(selected, gpus, ",")
+                for (i in gpus) keep[gpus[i]] = 1
+            }
+            {
+                idx=$1; uuid=$2
+                gsub(/ /, "", idx)
+                gsub(/ /, "", uuid)
+                if (keep[idx]) print uuid
+            }
+        ' \
+        | awk 'NF {keep[$0]=1} END {for (uuid in keep) print uuid}' > "${SWEEP_DIR}/.selected_gpu_uuids.tmp"
+    nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name,used_memory --format=csv,noheader 2>/dev/null \
+        | awk -F, 'NR==FNR {keep[$1]=1; next} {uuid=$1; gsub(/ /, "", uuid); if (keep[uuid]) print}' \
+            "${SWEEP_DIR}/.selected_gpu_uuids.tmp" - \
+        || true
+}
+
 wait_for_resources() {
     echo "Waiting for TRAIN_GPUS=${TRAIN_GPUS}, ROLLOUT_GPU=${ROLLOUT_GPU}, MemAvailable>=${HOST_MIN_AVAILABLE_GIB} GiB" >&2
     while true; do
-        local gpu_csv mem_avail_gib stamp ready
+        local gpu_csv mem_avail_gib stamp ready selected_compute
         gpu_csv="$(nvidia-smi --query-gpu=index,memory.used,utilization.gpu --format=csv,noheader,nounits)"
         mem_avail_gib="$(awk '/MemAvailable:/ {printf "%.0f", $2 / 1024 / 1024}' /proc/meminfo)"
         stamp="$(date -Is)"
@@ -184,6 +211,20 @@ wait_for_resources() {
         done < <(selected_gpus)
         if [ "${mem_avail_gib}" -lt "${HOST_MIN_AVAILABLE_GIB}" ]; then
             ready=0
+        fi
+        if [ "${PRORL_STRICT_GPU_ISOLATION}" = "1" ]; then
+            selected_compute="$(selected_gpu_compute_processes)"
+            if [ -n "${selected_compute}" ]; then
+                ready=0
+                echo "Selected GPU compute processes present; waiting:" >&2
+                while IFS= read -r line; do
+                    [ -z "${line}" ] && continue
+                    local pid cwd
+                    pid="$(awk -F, '{gsub(/ /,"",$2); print $2}' <<<"${line}")"
+                    cwd="$(readlink -f "/proc/${pid}/cwd" 2>/dev/null || true)"
+                    echo "  ${line}, cwd=${cwd}" >&2
+                done <<<"${selected_compute}"
+            fi
         fi
         if [ "${ready}" = "1" ]; then
             return 0
@@ -238,6 +279,7 @@ for config in "${CONFIGS[@]}"; do
         RUNTIME_BACKEND="${RUNTIME_BACKEND}" \
         PRORL_PROCESS_NAME="${PRORL_PROCESS_NAME}" \
         PRORL_KILL_STALE_RAY_PROCESSES=1 \
+        PRORL_STRICT_GPU_ISOLATION="${PRORL_STRICT_GPU_ISOLATION}" \
         AGENT_NPM_PACKAGE="@openai/codex@0.121.0" \
         SAVE_INTERVAL=1000000 \
         KEEP_CHECKPOINTS=0 \

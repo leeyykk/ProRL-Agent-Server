@@ -49,6 +49,7 @@ if [ "${DEBUG_ROLLOUT_ONLY}" = "1" ]; then
     ROLLOUT_GPU="${ROLLOUT_GPU:-$(echo "${SELECTED_GPUS}" | cut -d, -f1)}"
 fi
 
+export CUDA_DEVICE_ORDER="${CUDA_DEVICE_ORDER:-PCI_BUS_ID}"
 export CUDA_VISIBLE_DEVICES="${SELECTED_GPUS}"
 export TMPDIR="${TMPDIR:-/tmp/prorl_tmp_${RUN_STEM}}"
 export TEMP="${TMPDIR}"
@@ -134,7 +135,9 @@ fi
 
 MAX_PRELAUNCH_GPU_MEM_MIB="${MAX_PRELAUNCH_GPU_MEM_MIB:-1024}"
 HOST_MIN_AVAILABLE_GIB="${HOST_MIN_AVAILABLE_GIB:-120}"
+PRORL_STRICT_GPU_ISOLATION="${PRORL_STRICT_GPU_ISOLATION:-0}"
 "${PYTHON_BIN}" - <<PY
+import os
 import subprocess
 selected = [int(x) for x in "${SELECTED_GPUS}".split(",") if x.strip()]
 debug_rollout_only = "${DEBUG_ROLLOUT_ONLY}" == "1"
@@ -159,6 +162,48 @@ selected_rows = [by_idx[idx] for idx in selected]
 bad = [(idx, used) for idx, used, _ in selected_rows if used > ${MAX_PRELAUNCH_GPU_MEM_MIB}]
 if bad:
     raise SystemExit(f"Refusing launch; selected GPUs not free enough: {bad}")
+if "${PRORL_STRICT_GPU_ISOLATION}" == "1":
+    uuid_out = subprocess.check_output([
+        "nvidia-smi",
+        "--query-gpu=index,uuid",
+        "--format=csv,noheader",
+    ], text=True)
+    uuid_to_idx = {}
+    for line in uuid_out.strip().splitlines():
+        idx, uuid = [x.strip() for x in line.split(",", 1)]
+        uuid_to_idx[uuid] = int(idx)
+    try:
+        apps_out = subprocess.check_output([
+            "nvidia-smi",
+            "--query-compute-apps=gpu_uuid,pid,process_name,used_memory",
+            "--format=csv,noheader",
+        ], text=True)
+    except subprocess.CalledProcessError:
+        apps_out = ""
+    offenders = []
+    for line in apps_out.strip().splitlines():
+        parts = [x.strip() for x in line.split(",", 3)]
+        if len(parts) != 4:
+            continue
+        uuid, pid, proc_name, used = parts
+        idx = uuid_to_idx.get(uuid)
+        if idx not in selected:
+            continue
+        cwd = ""
+        try:
+            cwd = os.readlink(f"/proc/{pid}/cwd")
+        except OSError:
+            pass
+        offenders.append((idx, pid, used, proc_name, cwd))
+    if offenders:
+        lines = [
+            f"gpu={idx} pid={pid} mem={used} proc={proc_name} cwd={cwd}"
+            for idx, pid, used, proc_name, cwd in offenders
+        ]
+        raise SystemExit(
+            "Refusing launch; strict GPU isolation found existing compute "
+            "processes on selected GPUs:\n" + "\n".join(lines)
+        )
 print("GPU preflight OK:", selected_rows)
 PY
 
@@ -322,6 +367,7 @@ REF_LOAD=${REF_LOAD}
 SAVE_DIR=${SAVE_DIR}
 SWEGYM_DATA=${SWEGYM_DATA}
 SELECTED_GPUS=${SELECTED_GPUS}
+CUDA_DEVICE_ORDER=${CUDA_DEVICE_ORDER}
 CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}
 RAY_PORT=${RAY_PORT}
 TRAIN_GPUS=${TRAIN_GPUS}
@@ -510,6 +556,8 @@ import os
 
 keys = [
     "CUDA_HOME",
+    "CUDA_DEVICE_ORDER",
+    "CUDA_VISIBLE_DEVICES",
     "LD_LIBRARY_PATH",
     "PATH",
 ]
