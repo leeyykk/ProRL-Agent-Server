@@ -66,6 +66,7 @@ export WANDB_DIR="${RUN_DIR}/wandb"
 export POLAR_SESSION_BASE_DIR="${POLAR_SESSION_BASE_DIR:-${RUN_DIR}/runtime/polar_session_dirs}"
 export POLAR_PRESERVE_SESSION_DIRS="${POLAR_PRESERVE_SESSION_DIRS:-0}"
 export PRORL_KILL_STALE_RAY_PROCESSES="${PRORL_KILL_STALE_RAY_PROCESSES:-0}"
+export PRORL_GLOBAL_RAY_STOP="${PRORL_GLOBAL_RAY_STOP:-0}"
 export POLAR_MAX_COMPLETION_TOKENS="${POLAR_MAX_COMPLETION_TOKENS:-1024}"
 export SGLANG_ENABLE_JIT_DEEPGEMM="${SGLANG_ENABLE_JIT_DEEPGEMM:-0}"
 export SGLANG_BATCH_INVARIANT_OPS_ENABLE_MM_DEEPGEMM="${SGLANG_BATCH_INVARIANT_OPS_ENABLE_MM_DEEPGEMM:-0}"
@@ -343,10 +344,28 @@ else
 fi
 
 PIDS=()
+stop_private_ray() {
+    local pids=()
+    while IFS= read -r pid; do
+        [ -n "${pid}" ] && pids+=("${pid}")
+    done < <(
+        pgrep -u "$(id -u)" -f "${RAY_TMPDIR}/ray/session_|--temp-dir=${RAY_TMPDIR}/ray|--raylet_socket_name=${RAY_TMPDIR}/ray" \
+            2>/dev/null || true
+    )
+    if [ "${#pids[@]}" -gt 0 ]; then
+        kill "${pids[@]}" 2>/dev/null || true
+        sleep 2
+        kill -KILL "${pids[@]}" 2>/dev/null || true
+    fi
+}
 cleanup() {
     touch "${RUN_DIR}/monitor.stop" 2>/dev/null || true
     for pid in "${PIDS[@]}"; do kill "${pid}" 2>/dev/null || true; done
-    "${RAY_BIN}" stop --force >/dev/null 2>&1 || true
+    if [ "${PRORL_GLOBAL_RAY_STOP}" = "1" ]; then
+        "${RAY_BIN}" stop --force >/dev/null 2>&1 || true
+    else
+        stop_private_ray
+    fi
     if [ "${KEEP_CHECKPOINTS:-0}" != "1" ]; then
         rm -rf "${SAVE_DIR}"
     fi
@@ -443,7 +462,11 @@ for url in ("http://127.0.0.1:48080/health", "http://127.0.0.1:48100/health"):
         raise SystemExit(f"service not healthy: {url}: {last}")
 PY
 
-"${RAY_BIN}" stop --force >/dev/null 2>&1 || true
+if [ "${PRORL_GLOBAL_RAY_STOP}" = "1" ]; then
+    "${RAY_BIN}" stop --force >/dev/null 2>&1 || true
+else
+    stop_private_ray
+fi
 if [ "${PRORL_KILL_STALE_RAY_PROCESSES}" = "1" ]; then
     pkill -u "$(id -un)" -f "ray::WorkerDict" >/dev/null 2>&1 || true
     pkill -u "$(id -un)" -f "ray::SGLangEngine" >/dev/null 2>&1 || true
