@@ -137,12 +137,16 @@ fi
 MAX_PRELAUNCH_GPU_MEM_MIB="${MAX_PRELAUNCH_GPU_MEM_MIB:-1024}"
 HOST_MIN_AVAILABLE_GIB="${HOST_MIN_AVAILABLE_GIB:-120}"
 PRORL_STRICT_GPU_ISOLATION="${PRORL_STRICT_GPU_ISOLATION:-0}"
-"${PYTHON_BIN}" - <<PY
+strict_gpu_preflight() {
+    local stage="$1"
+    "${PYTHON_BIN}" - "$stage" <<PY
 import os
+import sys
 import subprocess
 selected = [int(x) for x in "${SELECTED_GPUS}".split(",") if x.strip()]
 debug_rollout_only = "${DEBUG_ROLLOUT_ONLY}" == "1"
 debug_train_only = bool("${LOAD_DEBUG_ROLLOUT_DATA}")
+stage = sys.argv[1]
 out = subprocess.check_output([
     "nvidia-smi",
     "--query-gpu=index,memory.used,memory.total",
@@ -162,7 +166,7 @@ if missing:
 selected_rows = [by_idx[idx] for idx in selected]
 bad = [(idx, used) for idx, used, _ in selected_rows if used > ${MAX_PRELAUNCH_GPU_MEM_MIB}]
 if bad:
-    raise SystemExit(f"Refusing launch; selected GPUs not free enough: {bad}")
+    raise SystemExit(f"Refusing launch at {stage}; selected GPUs not free enough: {bad}")
 if "${PRORL_STRICT_GPU_ISOLATION}" == "1":
     uuid_out = subprocess.check_output([
         "nvidia-smi",
@@ -202,11 +206,14 @@ if "${PRORL_STRICT_GPU_ISOLATION}" == "1":
             for idx, pid, used, proc_name, cwd in offenders
         ]
         raise SystemExit(
-            "Refusing launch; strict GPU isolation found existing compute "
+            f"Refusing launch at {stage}; strict GPU isolation found existing compute "
             "processes on selected GPUs:\n" + "\n".join(lines)
         )
-print("GPU preflight OK:", selected_rows)
+print(f"GPU preflight OK at {stage}:", selected_rows)
 PY
+}
+
+strict_gpu_preflight "startup"
 
 "${PYTHON_BIN}" - <<PY
 from pathlib import Path
@@ -474,6 +481,7 @@ if [ "${PRORL_KILL_STALE_RAY_PROCESSES}" = "1" ]; then
     pkill -u "$(id -un)" -f "sglang.launch_server|sglang.srt|train_async.py" >/dev/null 2>&1 || true
     sleep 3
 fi
+strict_gpu_preflight "before_ray_start"
 if [ -z "${RAY_PORT}" ]; then
     RAY_PORT="$("${PYTHON_BIN}" - <<'PY'
 import socket
@@ -517,6 +525,7 @@ if actual != expected:
     )
 print(f"Ray GPU preflight OK: {actual} GPU(s) at ${RAY_ADDRESS_URI}")
 PY
+strict_gpu_preflight "before_train_async"
 
 NUM_ROLLOUT="${NUM_ROLLOUT:-4}"
 ROLLOUT_BATCH_SIZE="${ROLLOUT_BATCH_SIZE:-1}"
