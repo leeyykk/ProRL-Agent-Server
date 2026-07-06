@@ -58,7 +58,10 @@ mkdir -p \
     "${APPTAINER_CACHEDIR}" \
     "${APPTAINER_TMPDIR}"
 
-SOURCE_PROMPT_DATA="${SOURCE_PROMPT_DATA:-${PRORL_ENV_ROOT}/data/swegym_train_apptainer_b200.jsonl}"
+SOURCE_PROMPT_DATA="${SOURCE_PROMPT_DATA:-}"
+if [ -z "${SOURCE_PROMPT_DATA}" ]; then
+    SOURCE_PROMPT_DATA="${SCRIPT_DIR}/swegym_train_293.jsonl"
+fi
 HF_CHECKPOINT="${HF_CHECKPOINT:-${SHARED_ROOT}/huggingface_models/Qwen3.5-4B}"
 APPTAINER_IMAGE_DIR="${APPTAINER_IMAGE_DIR:-${PRORL_ENV_ROOT}/apptainer_sifs/swegym_b200}"
 TORCH_DIST_DIR="${TORCH_DIST_DIR:-${PRORL_ENV_ROOT}/checkpoints/Qwen3.5-4B_torch_dist}"
@@ -71,6 +74,7 @@ ROLLOUT_SAVE_DIR="${ROLLOUT_SAVE_DIR:-${RUN_DIR}/rollout_results}"
 TASK_GROUPS="${TASK_GROUPS:-20}"
 if [ ! -f "${SOURCE_PROMPT_DATA}" ]; then
     echo "ERROR: source dataset JSONL not found: ${SOURCE_PROMPT_DATA}" >&2
+    echo "Set SOURCE_PROMPT_DATA=/path/to/swegym.jsonl, or restore ${SCRIPT_DIR}/swegym_train_293.jsonl." >&2
     exit 1
 fi
 if [ ! -d "${HF_CHECKPOINT}" ]; then
