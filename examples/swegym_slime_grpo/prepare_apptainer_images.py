@@ -86,6 +86,11 @@ def parse_args() -> argparse.Namespace:
         help="Only prepare SIF images; do not prepare the shared CLI directory.",
     )
     parser.add_argument(
+        "--cli-only",
+        action="store_true",
+        help="Only prepare the shared CLI directory; do not inspect or pull SIF images.",
+    )
+    parser.add_argument(
         "--force-cli",
         action="store_true",
         help="Rebuild and re-extract the shared Node/agent CLI directory.",
@@ -292,6 +297,9 @@ def main() -> int:
 
     if not args.skip_cli:
         ensure_agent_cli_dir(args.agent_cli_dir, force=args.force_cli)
+    if args.cli_only:
+        print("CLI-only setup complete.")
+        return 0
 
     instances = select_instances(args)
     if not instances:

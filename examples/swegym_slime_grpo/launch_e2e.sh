@@ -12,16 +12,14 @@ PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 cd "${PROJECT_ROOT}"
 
 PYTHON_BIN="${PYTHON_BIN:-${PROJECT_ROOT}/.venv/bin/python3}"
-if [ ! -x "${PYTHON_BIN}" ]; then
-    PYTHON_BIN="$(command -v python3 || command -v python)"
-fi
+VENV_DIR="${VENV_DIR:-${PROJECT_ROOT}/.venv}"
 SLIME_DIR="${SLIME_DIR:-${PROJECT_ROOT}/slime}"
 SLIME_REPO="${SLIME_REPO:-https://github.com/THUDM/slime.git}"
 SLIME_REF="${SLIME_REF:-v0.2.4}"
 
 MEGATRON_DIR="${MEGATRON_DIR:-${PROJECT_ROOT}/Megatron-LM}"
 MEGATRON_REPO="${MEGATRON_REPO:-https://github.com/NVIDIA/Megatron-LM.git}"
-MEGATRON_REF="${MEGATRON_REF:-main}"
+MEGATRON_REF="${MEGATRON_REF:-3714d81d418c9f1bca4594fc35f9e8289f652862}"
 
 HF_CHECKPOINT="${HF_CHECKPOINT:-Qwen/Qwen3.5-4B}"
 REF_LOAD="${REF_LOAD:-${TORCH_DIST_DIR:-${PROJECT_ROOT}/tmp/checkpoints/Qwen3.5-4B_torch_dist}}"
@@ -37,6 +35,7 @@ APPTAINER_TMPDIR="${APPTAINER_TMPDIR:-${PROJECT_ROOT}/tmp/apptainer_tmp}"
 POLAR_APPTAINER_BIN="${POLAR_APPTAINER_BIN:-/usr/bin/apptainer}"
 
 INSTALL_EDITABLE="${INSTALL_EDITABLE:-1}"
+INSTALL_TRAINING_DEPS="${INSTALL_TRAINING_DEPS:-1}"
 APPLY_SGLANG_PATCH="${APPLY_SGLANG_PATCH:-1}"
 PREPARE_IMAGES="${PREPARE_IMAGES:-1}"
 APPTAINER_PREPARE_JOBS="${APPTAINER_PREPARE_JOBS:-2}"
@@ -67,7 +66,12 @@ clone_if_missing() {
         exit 1
     fi
     echo "Cloning ${name} ${ref} -> ${dest}"
-    git clone --branch "${ref}" --depth 1 "${repo}" "${dest}"
+    if git clone --branch "${ref}" --depth 1 "${repo}" "${dest}" 2>/dev/null; then
+        return
+    fi
+    git clone --depth 1 "${repo}" "${dest}"
+    git -C "${dest}" fetch --depth 1 origin "${ref}" 2>/dev/null || true
+    git -C "${dest}" checkout "${ref}"
 }
 
 checkpoint_ready() {
@@ -92,11 +96,18 @@ if key and hasattr(wandb, "login"):
 PY
 }
 
-require_cmd git
-require_cmd "${PYTHON_BIN}"
 require_cmd uv
+require_cmd git
 require_cmd "${POLAR_APPTAINER_BIN}"
-require_cmd ray
+
+if [ ! -x "${PYTHON_BIN}" ]; then
+    echo "Creating Python virtual environment: ${VENV_DIR}"
+    uv venv --python "${PYTHON_VERSION:-3.11}" "${VENV_DIR}"
+    PYTHON_BIN="${VENV_DIR}/bin/python3"
+fi
+export VIRTUAL_ENV="${VENV_DIR}"
+export PATH="${VENV_DIR}/bin:${PATH}"
+require_cmd "${PYTHON_BIN}"
 
 clone_if_missing "Slime" "${SLIME_REPO}" "${SLIME_REF}" "${SLIME_DIR}"
 clone_if_missing "Megatron-LM" "${MEGATRON_REPO}" "${MEGATRON_REF}" "${MEGATRON_DIR}"
@@ -106,13 +117,21 @@ if [ "${INSTALL_EDITABLE}" = "1" ]; then
     uv pip install -e "${SLIME_DIR}"
     uv pip install -e "${MEGATRON_DIR}"
 fi
+if [ "${INSTALL_TRAINING_DEPS}" = "1" ]; then
+    uv pip install "numpy<2" mbridge
+    uv pip install --prerelease=allow "sglang[all]==0.5.10"
+fi
 
 bash "${PROJECT_ROOT}/scripts/patch/patch_slime.sh" "${SLIME_DIR}"
 if [ "${APPLY_SGLANG_PATCH}" = "1" ]; then
     bash "${PROJECT_ROOT}/scripts/patch/patch_sglang.sh"
 fi
 
-"${PYTHON_BIN}" "${SCRIPT_DIR}/prepare_data.py"
+require_cmd ray
+
+if [ "${PREPARE_DATA:-1}" = "1" ]; then
+    "${PYTHON_BIN}" "${SCRIPT_DIR}/prepare_data.py"
+fi
 
 if [ "${PREPARE_IMAGES}" = "1" ]; then
     "${PYTHON_BIN}" "${SCRIPT_DIR}/prepare_apptainer_images.py" \

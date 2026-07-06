@@ -6,9 +6,8 @@
 # hybrid attention (1 full + 3 GatedDeltaNet linear per 4 layers). Text-only
 # RL requires the SGLang VLM input_ids patch (see MEMORY.md).
 #
-# GPU layout (8x B200, default):
-#   GPU 0-1     – Megatron GRPO training (TP=2, DP=1)
-#   GPU 2-7     – SGLang inference (6 engines × TP=1, managed by Slime/Ray)
+# GPU layout is controlled by the wrapper via CUDA_VISIBLE_DEVICES and:
+#   RAY_NUM_GPUS, ACTOR_NUM_GPUS_PER_NODE, ROLLOUT_NUM_GPUS.
 #
 # Port layout:
 #   9000        – SGLang router (slime-managed, load-balances engines)
@@ -32,6 +31,7 @@ if [ ! -x "${PYTHON_BIN}" ]; then
     PYTHON_BIN="$(command -v python3 || command -v python)"
 fi
 PYTHON_BIN_DIR="$(cd -- "$(dirname -- "${PYTHON_BIN}")" &>/dev/null && pwd)"
+VENV_DIR="${VENV_DIR:-${PROJECT_ROOT}/.venv}"
 
 is_path_like() {
     case "$1" in
@@ -126,7 +126,7 @@ else
 fi
 
 # ── Data ───────────────────────────────────────────────────────────
-PROMPT_DATA="${SCRIPT_DIR}/swegym_train_293.jsonl"
+PROMPT_DATA="${PROMPT_DATA:-${SCRIPT_DIR}/swegym_train_293.jsonl}"
 if [ ! -f "$PROMPT_DATA" ]; then
     echo "Preparing train data..."
     "${PYTHON_BIN}" "${SCRIPT_DIR}/prepare_data.py"
@@ -144,10 +144,19 @@ TOPOLOGY_TEMPLATE="${TOPOLOGY_TEMPLATE:-${SCRIPT_DIR}/topology.yaml}"
 POLAR_CONFIG_TEMPLATE="${POLAR_CONFIG_TEMPLATE:-${SCRIPT_DIR}/polar_config.yaml}"
 TOPOLOGY_PATH="${TOPOLOGY_PATH:-${RUN_DIR}/topology.yaml}"
 CUSTOM_CONFIG_PATH="${CUSTOM_CONFIG_PATH:-${RUN_DIR}/polar_config.yaml}"
+ROLLOUT_SAVE_DIR="${ROLLOUT_SAVE_DIR:-${RUN_DIR}/rollout_results}"
+MAX_INIT_WORKERS="${MAX_INIT_WORKERS:-16}"
+MAX_RUN_WORKERS="${MAX_RUN_WORKERS:-16}"
+MAX_POSTRUN_WORKERS="${MAX_POSTRUN_WORKERS:-${MAX_EVAL_WORKERS:-16}}"
+POLAR_MAX_ASYNC_LEVEL="${POLAR_MAX_ASYNC_LEVEL:-2}"
+POLAR_MIN_COMPLETE_ACCEPT_FRACTION="${POLAR_MIN_COMPLETE_ACCEPT_FRACTION:-0.6}"
+POLAR_REQUEST_TIMEOUT="${POLAR_REQUEST_TIMEOUT:-2400}"
 
 "${PYTHON_BIN}" - "$TOPOLOGY_TEMPLATE" "$TOPOLOGY_PATH" "$SGLANG_ROUTER_BASE_URL" \
        "$POLAR_CONFIG_TEMPLATE" "$CUSTOM_CONFIG_PATH" "$AGENT_CLI_DIR" \
-       "$APPTAINER_IMAGE_DIR" <<'PY'
+       "$APPTAINER_IMAGE_DIR" "$ROLLOUT_SAVE_DIR" "$MAX_INIT_WORKERS" \
+       "$MAX_RUN_WORKERS" "$MAX_POSTRUN_WORKERS" "$POLAR_MAX_ASYNC_LEVEL" \
+       "$POLAR_MIN_COMPLETE_ACCEPT_FRACTION" "$POLAR_REQUEST_TIMEOUT" <<'PY'
 from pathlib import Path
 import sys
 import yaml
@@ -160,12 +169,23 @@ import yaml
     polar_out,
     agent_cli_dir,
     apptainer_image_dir,
+    rollout_save_dir,
+    max_init_workers,
+    max_run_workers,
+    max_postrun_workers,
+    polar_max_async_level,
+    polar_min_complete_accept_fraction,
+    polar_request_timeout,
 ) = sys.argv[1:]
 
 with open(topology_template, encoding="utf-8") as fh:
     topology = yaml.safe_load(fh) or {}
+topology.setdefault("rollout", {})["save_dir"] = rollout_save_dir
 for node in topology.get("gateway", {}).get("nodes", []):
     node.setdefault("sglang", {})["base_url"] = router_url
+    node["max_init_workers"] = int(max_init_workers)
+    node["max_run_workers"] = int(max_run_workers)
+    node["max_postrun_workers"] = int(max_postrun_workers)
 Path(topology_out).parent.mkdir(parents=True, exist_ok=True)
 with open(topology_out, "w", encoding="utf-8") as fh:
     yaml.safe_dump(topology, fh, sort_keys=False)
@@ -174,6 +194,13 @@ with open(polar_template, encoding="utf-8") as fh:
     polar_config = yaml.safe_load(fh) or {}
 polar_config["polar_agent_cli_dir"] = agent_cli_dir
 polar_config["polar_apptainer_image_dir"] = apptainer_image_dir
+polar_config["polar_max_async_level"] = int(polar_max_async_level)
+polar_config["polar_min_complete_accept_fraction"] = float(
+    polar_min_complete_accept_fraction
+)
+polar_config["polar_request_timeout"] = int(polar_request_timeout)
+if "polar_task_template" in polar_config:
+    polar_config["polar_task_template"]["timeout_seconds"] = int(polar_request_timeout)
 Path(polar_out).parent.mkdir(parents=True, exist_ok=True)
 with open(polar_out, "w", encoding="utf-8") as fh:
     yaml.safe_dump(polar_config, fh, sort_keys=False)
@@ -182,15 +209,19 @@ PY
 echo "Using topology: ${TOPOLOGY_PATH}"
 echo "Using Polar config: ${CUSTOM_CONFIG_PATH}"
 echo "Using Apptainer image dir: ${APPTAINER_IMAGE_DIR}"
+echo "Using rollout save dir: ${ROLLOUT_SAVE_DIR}"
 echo "Using save dir: ${SAVE_DIR}"
 echo "Using SGLang router URL for Polar gateway: ${SGLANG_ROUTER_BASE_URL}"
+echo "Using workers: init=${MAX_INIT_WORKERS} run=${MAX_RUN_WORKERS} postrun=${MAX_POSTRUN_WORKERS} async=${POLAR_MAX_ASYNC_LEVEL}"
 
 # ── Cleanup on exit ────────────────────────────────────────────────
 PIDS=()
 cleanup() {
     echo "Shutting down..."
     for pid in "${PIDS[@]}"; do kill "$pid" 2>/dev/null || true; done
-    ray stop --force 2>/dev/null || true
+    if [ "${PRORL_RAY_STOP_ON_EXIT:-1}" = "1" ]; then
+        ray stop --force 2>/dev/null || true
+    fi
     wait 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -209,10 +240,20 @@ sleep 2
 curl -sf http://127.0.0.1:8080/health || { echo "Polar rollout server not healthy"; exit 1; }
 
 # ── Step 2: Ray + Slime (manages SGLang engines + training) ───────
-echo "=== Starting Ray (all 8 GPUs) ==="
-ray stop --force 2>/dev/null || true
+RAY_NUM_GPUS="${RAY_NUM_GPUS:-8}"
+RAY_TEMP_DIR="${RAY_TEMP_DIR:-${RUN_DIR}/ray_tmp}"
+mkdir -p "$RAY_TEMP_DIR"
+echo "=== Starting Ray (${RAY_NUM_GPUS} visible GPUs) ==="
+if [ "${PRORL_STOP_EXISTING_RAY:-1}" = "1" ]; then
+    ray stop --force 2>/dev/null || true
+fi
 sleep 1
-ray start --head --node-ip-address 127.0.0.1 --num-gpus 8 --disable-usage-stats
+ray start \
+    --head \
+    --node-ip-address 127.0.0.1 \
+    --num-gpus "$RAY_NUM_GPUS" \
+    --temp-dir "$RAY_TEMP_DIR" \
+    --disable-usage-stats
 
 CUDNN_LIB="${CUDNN_LIB:-${PROJECT_ROOT}/.venv/lib/python3.13/site-packages/nvidia/cudnn/lib}"
 RUNTIME_LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
@@ -223,7 +264,7 @@ RUNTIME_ENV_JSON="{
   \"env_vars\": {
     \"PYTHONPATH\": \"${MEGATRON_DIR}:${PROJECT_ROOT}/src\",
     \"PATH\": \"${PYTHON_BIN_DIR}:${PATH}\",
-    \"VIRTUAL_ENV\": \"${PROJECT_ROOT}/.venv\",
+    \"VIRTUAL_ENV\": \"${VENV_DIR}\",
     \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
     \"WANDB_DIR\": \"${PROJECT_ROOT}/logs\",
     \"LD_LIBRARY_PATH\": \"${RUNTIME_LD_LIBRARY_PATH}\",
@@ -240,6 +281,29 @@ ROLLOUT_BATCH_SIZE="${ROLLOUT_BATCH_SIZE:-4}"
 N_SAMPLES_PER_PROMPT="${N_SAMPLES_PER_PROMPT:-16}"
 MAX_TOKENS_PER_GPU="${MAX_TOKENS_PER_GPU:-60000}"
 SGLANG_CONTEXT_LENGTH="${SGLANG_CONTEXT_LENGTH:-50000}"
+ROLLOUT_MAX_RESPONSE_LEN="${ROLLOUT_MAX_RESPONSE_LEN:-16000}"
+ROLLOUT_MAX_PROMPT_LEN="${ROLLOUT_MAX_PROMPT_LEN:-32000}"
+NUM_EPOCH="${NUM_EPOCH:-1}"
+NUM_STEPS_PER_ROLLOUT="${NUM_STEPS_PER_ROLLOUT:-1}"
+TENSOR_MODEL_PARALLEL_SIZE="${TENSOR_MODEL_PARALLEL_SIZE:-2}"
+CONTEXT_PARALLEL_SIZE="${CONTEXT_PARALLEL_SIZE:-1}"
+SGLANG_MEM_FRACTION_STATIC="${SGLANG_MEM_FRACTION_STATIC:-0.8}"
+USE_DYNAMIC_BATCH_SIZE="${USE_DYNAMIC_BATCH_SIZE:-1}"
+USE_WANDB="${USE_WANDB:-1}"
+
+DYNAMIC_BATCH_ARGS=()
+if [ "$USE_DYNAMIC_BATCH_SIZE" = "1" ]; then
+    DYNAMIC_BATCH_ARGS+=(--use-dynamic-batch-size)
+fi
+
+WANDB_ARGS=()
+if [ "$USE_WANDB" = "1" ]; then
+    WANDB_ARGS+=(
+        --use-wandb
+        --wandb-project "${WANDB_PROJECT:-polar-swegym-grpo}"
+        --wandb-group "${WANDB_GROUP:-swegym-qwen35-4b-async-grpo}"
+    )
+fi
 
 # Rollout sizing: 4 prompts × 16 trajectories = 64 trajectories/rollout.
 # This matches the earlier high-util baseline and keeps request groups smaller
@@ -274,23 +338,23 @@ ray job submit --address="http://127.0.0.1:8265" \
     --metadata-key metadata \
     --rollout-shuffle \
     --reward-key score \
-    --num-epoch 1 \
+    --num-epoch "$NUM_EPOCH" \
     --rollout-batch-size "$ROLLOUT_BATCH_SIZE" \
     --n-samples-per-prompt "$N_SAMPLES_PER_PROMPT" \
-    --rollout-max-response-len 16000 \
-    --rollout-max-prompt-len 32000 \
+    --rollout-max-response-len "$ROLLOUT_MAX_RESPONSE_LEN" \
+    --rollout-max-prompt-len "$ROLLOUT_MAX_PROMPT_LEN" \
     --dynamic-history \
-    --num-steps-per-rollout 1 \
-    --tensor-model-parallel-size 2 \
+    --num-steps-per-rollout "$NUM_STEPS_PER_ROLLOUT" \
+    --tensor-model-parallel-size "$TENSOR_MODEL_PARALLEL_SIZE" \
     --sequence-parallel \
     --pipeline-model-parallel-size 1 \
-    --context-parallel-size 1 \
+    --context-parallel-size "$CONTEXT_PARALLEL_SIZE" \
     --expert-model-parallel-size 1 \
     --expert-tensor-parallel-size 1 \
     --recompute-granularity full \
     --recompute-method uniform \
     --recompute-num-layers 1 \
-    --use-dynamic-batch-size \
+    "${DYNAMIC_BATCH_ARGS[@]}" \
     --max-tokens-per-gpu "$MAX_TOKENS_PER_GPU" \
     --log-probs-chunk-size 256 \
     --advantage-estimator grpo \
@@ -314,11 +378,9 @@ ray job submit --address="http://127.0.0.1:8265" \
     --attention-softmax-in-fp32 \
     --attention-backend auto \
     --no-gradient-accumulation-fusion \
-    --sglang-mem-fraction-static 0.8 \
+    --sglang-mem-fraction-static "$SGLANG_MEM_FRACTION_STATIC" \
     --sglang-context-length "$SGLANG_CONTEXT_LENGTH" \
     --sglang-tool-call-parser qwen3_coder \
     --router-policy "${SGLANG_ROUTER_POLICY:-round_robin}" \
-    --use-wandb \
-    --wandb-project "${WANDB_PROJECT:-polar-swegym-grpo}" \
-    --wandb-group "${WANDB_GROUP:-swegym-qwen35-4b-async-grpo}" \
+    "${WANDB_ARGS[@]}" \
     --sglang-router-port "$SGLANG_ROUTER_PORT"
