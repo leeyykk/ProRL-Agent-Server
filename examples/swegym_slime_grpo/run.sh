@@ -145,6 +145,7 @@ POLAR_CONFIG_TEMPLATE="${POLAR_CONFIG_TEMPLATE:-${SCRIPT_DIR}/polar_config.yaml}
 TOPOLOGY_PATH="${TOPOLOGY_PATH:-${RUN_DIR}/topology.yaml}"
 CUSTOM_CONFIG_PATH="${CUSTOM_CONFIG_PATH:-${RUN_DIR}/polar_config.yaml}"
 ROLLOUT_SAVE_DIR="${ROLLOUT_SAVE_DIR:-${RUN_DIR}/rollout_results}"
+AGENT_HARNESS="${AGENT_HARNESS:-qwen_code}"
 MAX_INIT_WORKERS="${MAX_INIT_WORKERS:-16}"
 MAX_RUN_WORKERS="${MAX_RUN_WORKERS:-16}"
 MAX_POSTRUN_WORKERS="${MAX_POSTRUN_WORKERS:-${MAX_EVAL_WORKERS:-16}}"
@@ -156,7 +157,8 @@ POLAR_REQUEST_TIMEOUT="${POLAR_REQUEST_TIMEOUT:-2400}"
        "$POLAR_CONFIG_TEMPLATE" "$CUSTOM_CONFIG_PATH" "$AGENT_CLI_DIR" \
        "$APPTAINER_IMAGE_DIR" "$ROLLOUT_SAVE_DIR" "$MAX_INIT_WORKERS" \
        "$MAX_RUN_WORKERS" "$MAX_POSTRUN_WORKERS" "$POLAR_MAX_ASYNC_LEVEL" \
-       "$POLAR_MIN_COMPLETE_ACCEPT_FRACTION" "$POLAR_REQUEST_TIMEOUT" <<'PY'
+       "$POLAR_MIN_COMPLETE_ACCEPT_FRACTION" "$POLAR_REQUEST_TIMEOUT" \
+       "$AGENT_HARNESS" <<'PY'
 from pathlib import Path
 import sys
 import yaml
@@ -176,6 +178,7 @@ import yaml
     polar_max_async_level,
     polar_min_complete_accept_fraction,
     polar_request_timeout,
+    agent_harness,
 ) = sys.argv[1:]
 
 with open(topology_template, encoding="utf-8") as fh:
@@ -201,6 +204,7 @@ polar_config["polar_min_complete_accept_fraction"] = float(
 polar_config["polar_request_timeout"] = int(polar_request_timeout)
 if "polar_task_template" in polar_config:
     polar_config["polar_task_template"]["timeout_seconds"] = int(polar_request_timeout)
+    polar_config["polar_task_template"].setdefault("agent", {})["harness"] = agent_harness
 Path(polar_out).parent.mkdir(parents=True, exist_ok=True)
 with open(polar_out, "w", encoding="utf-8") as fh:
     yaml.safe_dump(polar_config, fh, sort_keys=False)
@@ -212,6 +216,7 @@ echo "Using Apptainer image dir: ${APPTAINER_IMAGE_DIR}"
 echo "Using rollout save dir: ${ROLLOUT_SAVE_DIR}"
 echo "Using save dir: ${SAVE_DIR}"
 echo "Using SGLang router URL for Polar gateway: ${SGLANG_ROUTER_BASE_URL}"
+echo "Using agent harness: ${AGENT_HARNESS}"
 echo "Using workers: init=${MAX_INIT_WORKERS} run=${MAX_RUN_WORKERS} postrun=${MAX_POSTRUN_WORKERS} async=${POLAR_MAX_ASYNC_LEVEL}"
 
 # ── Cleanup on exit ────────────────────────────────────────────────

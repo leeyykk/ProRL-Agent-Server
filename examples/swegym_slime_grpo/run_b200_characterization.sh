@@ -63,6 +63,7 @@ APPTAINER_IMAGE_DIR="${APPTAINER_IMAGE_DIR:-/home/korea_bupj/vialab/yokyung/pror
 TORCH_DIST_DIR="${TORCH_DIST_DIR:-/home/korea_bupj/vialab/yokyung/prorl_agent_server_env/checkpoints/Qwen3.5-4B_torch_dist}"
 SAVE_DIR="${SAVE_DIR:-${PROJECT_ROOT}/tmp/ckpt/swegym_slime_grpo_qwen35_4b/${RUN_ID}}"
 AGENT_CLI_DIR="${AGENT_CLI_DIR:-/home/korea_bupj/vialab/yokyung/prorl_agent_server_env/swegym_agent_cli/opt_node}"
+AGENT_HARNESS="${AGENT_HARNESS:-codex}"
 PROMPT_DATA="${PROMPT_DATA:-${RUN_DIR}/swegym_train_20groups.jsonl}"
 ROLLOUT_SAVE_DIR="${ROLLOUT_SAVE_DIR:-${RUN_DIR}/rollout_results}"
 
@@ -103,7 +104,13 @@ PY
 
 if [ "${PREPARE_AGENT_CLI:-1}" = "1" ]; then
     missing_cli=0
-    for bin_name in node npm npx codex claude qwen opencode pi; do
+    required_bins="node npm npx ${AGENT_HARNESS}"
+    if [ "${AGENT_HARNESS}" = "claude_code" ]; then
+        required_bins="node npm npx claude"
+    elif [ "${AGENT_HARNESS}" = "qwen_code" ]; then
+        required_bins="node npm npx qwen"
+    fi
+    for bin_name in ${required_bins}; do
         if [ ! -x "${AGENT_CLI_DIR}/bin/${bin_name}" ]; then
             missing_cli=1
             break
@@ -127,7 +134,7 @@ fi
 
 export RUN_ID RUN_DIR PROMPT_DATA ROLLOUT_SAVE_DIR
 export HF_CHECKPOINT TORCH_DIST_DIR REF_LOAD="${TORCH_DIST_DIR}" SAVE_DIR
-export APPTAINER_IMAGE_DIR AGENT_CLI_DIR
+export APPTAINER_IMAGE_DIR AGENT_CLI_DIR AGENT_HARNESS
 export PREPARE_DATA=0 PREPARE_IMAGES=0
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2}"
 export RAY_NUM_GPUS="${RAY_NUM_GPUS:-3}"
@@ -165,6 +172,8 @@ export WANDB_GROUP="${WANDB_GROUP:-b200-gs4-characterization}"
 
 echo "=== B200 characterization config ==="
 echo "RUN_ID=${RUN_ID}"
+echo "agent harness=${AGENT_HARNESS}"
+echo "agent CLI dir=${AGENT_CLI_DIR}"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} (Ray GPUs: ${RAY_NUM_GPUS})"
 echo "train GPUs=${TRAIN_GPUS}, rollout GPUs=${ROLLOUT_GPUS}"
 echo "task groups=${TASK_GROUPS}, group size=${N_SAMPLES_PER_PROMPT}, rollout batch=${ROLLOUT_BATCH_SIZE}"
