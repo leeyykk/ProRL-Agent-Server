@@ -303,6 +303,12 @@ task = config.setdefault("polar_task_template", {})
 runtime = task.setdefault("runtime", {})
 if "${RUNTIME_BACKEND}":
     runtime["backend"] = "${RUNTIME_BACKEND}"
+if runtime.get("backend") == "apptainer":
+    # The Polar Apptainer runtime does not implement cgroup-style resource
+    # limits. Leaving Docker limits in the template makes session init fail
+    # before Codex or SGLang can run.
+    for key in ("cpus", "memory_mb", "storage_mb"):
+        runtime.pop(key, None)
 runtime_env = runtime.setdefault("env", {})
 prepare_steps = runtime.get("prepare") or []
 for step in prepare_steps:
