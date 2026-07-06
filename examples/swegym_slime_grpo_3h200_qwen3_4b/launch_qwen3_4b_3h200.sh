@@ -73,15 +73,21 @@ export SGLANG_BATCH_INVARIANT_OPS_ENABLE_MM_DEEPGEMM="${SGLANG_BATCH_INVARIANT_O
 export PRORL_DISABLE_NUMACTL_BIND="${PRORL_DISABLE_NUMACTL_BIND:-0}"
 export NCCL_P2P_DISABLE="${NCCL_P2P_DISABLE:-1}"
 NVIDIA_SITE_PACKAGES="${PROJECT_ROOT}/.venv/lib/python3.12/site-packages/nvidia"
+TORCH_LIBRARY_DIR="${PROJECT_ROOT}/.venv/lib/python3.12/site-packages/torch/lib"
+export CUDA_HOME="${CUDA_HOME:-/usr/local/cuda-13.0}"
+LIBRARY_PATHS=()
+if [ -d "${TORCH_LIBRARY_DIR}" ]; then
+    LIBRARY_PATHS+=("${TORCH_LIBRARY_DIR}")
+fi
 if [ -d "${NVIDIA_SITE_PACKAGES}" ]; then
-    export CUDA_HOME="${CUDA_HOME:-/usr/local/cuda-13.0}"
-    NVIDIA_LIBRARY_PATHS="$(
-        find "${NVIDIA_SITE_PACKAGES}" -mindepth 2 -maxdepth 2 -type d -name lib -print 2>/dev/null \
-            | paste -sd: -
-    )"
-    if [ -n "${NVIDIA_LIBRARY_PATHS}" ]; then
-        export LD_LIBRARY_PATH="${NVIDIA_LIBRARY_PATHS}:${LD_LIBRARY_PATH:-}"
-    fi
+    while IFS= read -r lib_dir; do
+        LIBRARY_PATHS+=("${lib_dir}")
+    done < <(find "${NVIDIA_SITE_PACKAGES}" -type d -name lib -print 2>/dev/null | sort)
+fi
+if [ "${#LIBRARY_PATHS[@]}" -gt 0 ]; then
+    IFS=:
+    export LD_LIBRARY_PATH="${LIBRARY_PATHS[*]}:${LD_LIBRARY_PATH:-}"
+    unset IFS
 fi
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 PRORL_PROCESS_NAME="${PRORL_PROCESS_NAME:-}"
