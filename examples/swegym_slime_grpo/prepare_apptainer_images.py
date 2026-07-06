@@ -57,6 +57,12 @@ def parse_args() -> argparse.Namespace:
         help="Only prepare the SIF image for this instance_id.",
     )
     parser.add_argument(
+        "--prompt-data",
+        type=Path,
+        default=None,
+        help="Read instance_ids from a Slime prompt JSONL file instead of the built-in dataset.",
+    )
+    parser.add_argument(
         "--image-dir",
         type=Path,
         default=DEFAULT_IMAGE_DIR,
@@ -114,7 +120,48 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _instances_from_prompt_data(path: Path) -> list[dict[str, object]]:
+    instances: list[dict[str, object]] = []
+    seen: set[str] = set()
+    with path.open(encoding="utf-8") as fh:
+        for line_no, line in enumerate(fh, start=1):
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            metadata = row.get("metadata") or {}
+            instance = metadata.get("instance")
+            if isinstance(instance, dict):
+                instance_id = str(instance.get("instance_id") or metadata.get("instance_id") or "")
+                selected = dict(instance)
+            else:
+                instance_id = str(metadata.get("instance_id") or "")
+                selected = {"instance_id": instance_id}
+            if not instance_id:
+                raise ValueError(f"{path}:{line_no} does not contain metadata.instance_id")
+            if instance_id in seen:
+                continue
+            seen.add(instance_id)
+            selected["instance_id"] = instance_id
+            instances.append(selected)
+    return instances
+
+
 def select_instances(args: argparse.Namespace) -> list[dict[str, object]]:
+    if args.prompt_data is not None:
+        instances = _instances_from_prompt_data(args.prompt_data)
+        if args.instance_id:
+            wanted = set(args.instance_id)
+            instances = [
+                instance for instance in instances
+                if str(instance.get("instance_id")) in wanted
+            ]
+            missing = sorted(wanted - {str(instance.get("instance_id")) for instance in instances})
+            if missing:
+                raise SystemExit(
+                    f"Instance_id(s) not found in {args.prompt_data}: {', '.join(missing)}"
+                )
+        return instances
+
     instances = fetch_all_instances(refresh=args.refresh_dataset_cache)
     if args.instance_id:
         wanted = set(args.instance_id)

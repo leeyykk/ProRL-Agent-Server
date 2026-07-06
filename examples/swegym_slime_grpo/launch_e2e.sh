@@ -134,12 +134,17 @@ if [ "${PREPARE_DATA:-1}" = "1" ]; then
 fi
 
 if [ "${PREPARE_IMAGES}" = "1" ]; then
+    PREPARE_IMAGE_ARGS=()
+    if [ -n "${APPTAINER_PROMPT_DATA:-${PROMPT_DATA:-}}" ]; then
+        PREPARE_IMAGE_ARGS+=(--prompt-data "${APPTAINER_PROMPT_DATA:-${PROMPT_DATA}}")
+    fi
     "${PYTHON_BIN}" "${SCRIPT_DIR}/prepare_apptainer_images.py" \
         --agent-cli-dir "${AGENT_CLI_DIR}" \
         --image-dir "${APPTAINER_IMAGE_DIR}" \
         --cache-dir "${APPTAINER_CACHEDIR}" \
         --tmp-dir "${APPTAINER_TMPDIR}" \
-        --jobs "${APPTAINER_PREPARE_JOBS}"
+        --jobs "${APPTAINER_PREPARE_JOBS}" \
+        "${PREPARE_IMAGE_ARGS[@]}"
 fi
 
 if [ "${CONVERT_WEIGHTS}" = "1" ] || { [ "${CONVERT_WEIGHTS}" = "auto" ] && ! checkpoint_ready; }; then

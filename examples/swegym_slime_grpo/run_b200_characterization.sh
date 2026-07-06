@@ -15,7 +15,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 cd "${PROJECT_ROOT}"
 
-SHARED_ROOT="${SHARED_ROOT:-/home/korea_bupj/vialab/yokyung}"
+SHARED_ROOT="${SHARED_ROOT:-$(cd -- "${PROJECT_ROOT}/.." && pwd)}"
 case "${PROJECT_ROOT}" in
     "${SHARED_ROOT}"/*) ;;
     *)
@@ -32,8 +32,9 @@ esac
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 RUN_ID="${RUN_ID:-b200_gs4_20groups_${timestamp}}"
 RUN_DIR="${RUN_DIR:-${PROJECT_ROOT}/tmp/swegym_slime_grpo_b200/${RUN_ID}}"
-SCRATCH_ROOT="${SCRATCH_ROOT:-${SHARED_ROOT}/prorl_agent_server_env/runtime/polar_b200}"
-mkdir -p "${RUN_DIR}" "${SCRATCH_ROOT}"
+PRORL_ENV_ROOT="${PRORL_ENV_ROOT:-${SHARED_ROOT}/prorl_agent_server_env}"
+SCRATCH_ROOT="${SCRATCH_ROOT:-${PRORL_ENV_ROOT}/runtime/polar_b200}"
+mkdir -p "${RUN_DIR}" "${PRORL_ENV_ROOT}" "${SCRATCH_ROOT}"
 
 export TMPDIR="${TMPDIR:-${SCRATCH_ROOT}/tmp}"
 export TMP="${TMP:-${TMPDIR}}"
@@ -57,12 +58,12 @@ mkdir -p \
     "${APPTAINER_CACHEDIR}" \
     "${APPTAINER_TMPDIR}"
 
-SOURCE_PROMPT_DATA="${SOURCE_PROMPT_DATA:-/home/korea_bupj/vialab/yokyung/prorl_agent_server_env/data/swegym_train_apptainer_b200.jsonl}"
-HF_CHECKPOINT="${HF_CHECKPOINT:-/home/korea_bupj/vialab/yokyung/huggingface_models/Qwen3.5-4B}"
-APPTAINER_IMAGE_DIR="${APPTAINER_IMAGE_DIR:-/home/korea_bupj/vialab/yokyung/prorl_agent_server_env/apptainer_sifs/swegym_b200}"
-TORCH_DIST_DIR="${TORCH_DIST_DIR:-/home/korea_bupj/vialab/yokyung/prorl_agent_server_env/checkpoints/Qwen3.5-4B_torch_dist}"
+SOURCE_PROMPT_DATA="${SOURCE_PROMPT_DATA:-${PRORL_ENV_ROOT}/data/swegym_train_apptainer_b200.jsonl}"
+HF_CHECKPOINT="${HF_CHECKPOINT:-${SHARED_ROOT}/huggingface_models/Qwen3.5-4B}"
+APPTAINER_IMAGE_DIR="${APPTAINER_IMAGE_DIR:-${PRORL_ENV_ROOT}/apptainer_sifs/swegym_b200}"
+TORCH_DIST_DIR="${TORCH_DIST_DIR:-${PRORL_ENV_ROOT}/checkpoints/Qwen3.5-4B_torch_dist}"
 SAVE_DIR="${SAVE_DIR:-${PROJECT_ROOT}/tmp/ckpt/swegym_slime_grpo_qwen35_4b/${RUN_ID}}"
-AGENT_CLI_DIR="${AGENT_CLI_DIR:-/home/korea_bupj/vialab/yokyung/prorl_agent_server_env/swegym_agent_cli/opt_node}"
+AGENT_CLI_DIR="${AGENT_CLI_DIR:-${PRORL_ENV_ROOT}/swegym_agent_cli/opt_node}"
 AGENT_HARNESS="${AGENT_HARNESS:-codex}"
 PROMPT_DATA="${PROMPT_DATA:-${RUN_DIR}/swegym_train_20groups.jsonl}"
 ROLLOUT_SAVE_DIR="${ROLLOUT_SAVE_DIR:-${RUN_DIR}/rollout_results}"
@@ -76,10 +77,7 @@ if [ ! -d "${HF_CHECKPOINT}" ]; then
     echo "ERROR: HF checkpoint directory not found: ${HF_CHECKPOINT}" >&2
     exit 1
 fi
-if [ ! -d "${APPTAINER_IMAGE_DIR}" ]; then
-    echo "ERROR: Apptainer SIF directory not found: ${APPTAINER_IMAGE_DIR}" >&2
-    exit 1
-fi
+mkdir -p "${APPTAINER_IMAGE_DIR}" "$(dirname -- "${TORCH_DIST_DIR}")"
 
 python3 - "${SOURCE_PROMPT_DATA}" "${PROMPT_DATA}" "${TASK_GROUPS}" <<'PY'
 from pathlib import Path
@@ -135,7 +133,9 @@ fi
 export RUN_ID RUN_DIR PROMPT_DATA ROLLOUT_SAVE_DIR
 export HF_CHECKPOINT TORCH_DIST_DIR REF_LOAD="${TORCH_DIST_DIR}" SAVE_DIR
 export APPTAINER_IMAGE_DIR AGENT_CLI_DIR AGENT_HARNESS
-export PREPARE_DATA=0 PREPARE_IMAGES=0
+export PREPARE_DATA=0
+export PREPARE_IMAGES="${PREPARE_IMAGES:-1}"
+export APPTAINER_PROMPT_DATA="${APPTAINER_PROMPT_DATA:-${PROMPT_DATA}}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2}"
 export RAY_NUM_GPUS="${RAY_NUM_GPUS:-3}"
 export TRAIN_GPUS="${TRAIN_GPUS:-0,1}"
@@ -174,6 +174,11 @@ echo "=== B200 characterization config ==="
 echo "RUN_ID=${RUN_ID}"
 echo "agent harness=${AGENT_HARNESS}"
 echo "agent CLI dir=${AGENT_CLI_DIR}"
+echo "env root=${PRORL_ENV_ROOT}"
+echo "HF checkpoint=${HF_CHECKPOINT}"
+echo "source prompt data=${SOURCE_PROMPT_DATA}"
+echo "Apptainer image dir=${APPTAINER_IMAGE_DIR}"
+echo "torch_dist checkpoint=${TORCH_DIST_DIR}"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} (Ray GPUs: ${RAY_NUM_GPUS})"
 echo "train GPUs=${TRAIN_GPUS}, rollout GPUs=${ROLLOUT_GPUS}"
 echo "task groups=${TASK_GROUPS}, group size=${N_SAMPLES_PER_PROMPT}, rollout batch=${ROLLOUT_BATCH_SIZE}"
