@@ -126,6 +126,11 @@ if [ "${SKIP_ENV}" != "1" ]; then
 fi
 
 PYTHON_BIN="${PYTHON_BIN:-${PROJECT_ROOT}/.venv/bin/python}"
+if [ -x "${PYTHON_BIN}" ]; then
+    # Megatron requires NumPy 1.x, while SGLang/Transformers need a SciPy
+    # version compatible with Python 3.12 and NumPy's removed aliases.
+    uv pip install --python "${PYTHON_BIN}" --force-reinstall "numpy==1.26.4" "scipy==1.13.1"
+fi
 if [ ! -x "${PYTHON_BIN}" ]; then
     echo "ERROR: Python env not found after setup: ${PYTHON_BIN}" >&2
     exit 1
