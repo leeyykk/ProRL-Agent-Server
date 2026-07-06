@@ -42,12 +42,12 @@ class ApptainerRuntime(BaseRuntime):
     async def start(self) -> None:
         if self._destroyed:
             raise RuntimeError("apptainer runtime was already destroyed")
-        # Use a host-backed overlay directory instead of --writable-tmpfs
-        # (default tmpfs overlay is only 64 MB, too small for most workloads).
-        self._overlay_dir = self.session_dir / "overlay"
-        self._overlay_dir.mkdir(parents=True, exist_ok=True)
-        args = [self._binary, "instance", "start",
-                "--overlay", str(self._overlay_dir)]
+        # Keep the SIF image read-only and provide a small writable layer for
+        # incidental container writes. The SWE-Gym workspace, home, npm cache,
+        # and artifacts live under the host-backed /polar/session bind mount,
+        # so a large writable overlay is not required here. Some Apptainer
+        # builds reject a plain directory passed to --overlay.
+        args = [self._binary, "instance", "start", "--writable-tmpfs"]
         if self.spec.gpus > 0:
             args.append("--nv")
         network_name: str | None
@@ -64,10 +64,10 @@ class ApptainerRuntime(BaseRuntime):
         for volume in self.spec.kwargs.get("volumes", []):
             args.extend(["--bind", str(volume)])
         args.extend([self.spec.image, self._instance_name])
-        rc, _, _ = await self._run_local_command(*args)
+        rc, _, stderr = await self._run_local_command(*args, capture=True)
         if rc != 0:
             raise RuntimeError(
-                f"{self._binary} instance start failed with exit code {rc}"
+                f"{self._binary} instance start failed with exit code {rc}: {stderr}"
             )
 
     _STOP_TIMEOUT = 30.0
