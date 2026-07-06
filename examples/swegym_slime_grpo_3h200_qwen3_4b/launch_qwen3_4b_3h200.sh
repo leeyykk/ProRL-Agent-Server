@@ -70,6 +70,7 @@ export PRORL_GLOBAL_RAY_STOP="${PRORL_GLOBAL_RAY_STOP:-0}"
 export POLAR_MAX_COMPLETION_TOKENS="${POLAR_MAX_COMPLETION_TOKENS:-1024}"
 export SGLANG_ENABLE_JIT_DEEPGEMM="${SGLANG_ENABLE_JIT_DEEPGEMM:-0}"
 export SGLANG_BATCH_INVARIANT_OPS_ENABLE_MM_DEEPGEMM="${SGLANG_BATCH_INVARIANT_OPS_ENABLE_MM_DEEPGEMM:-0}"
+export PRORL_DISABLE_NUMACTL_BIND="${PRORL_DISABLE_NUMACTL_BIND:-0}"
 export NCCL_P2P_DISABLE="${NCCL_P2P_DISABLE:-1}"
 NVIDIA_SITE_PACKAGES="${PROJECT_ROOT}/.venv/lib/python3.12/site-packages/nvidia"
 if [ -d "${NVIDIA_SITE_PACKAGES}" ]; then
@@ -94,6 +95,33 @@ mkdir -p "${RUN_DIR}/logs" "${TMPDIR}" "${RAY_TMPDIR}" "${HF_HOME}" \
     "${HF_HUB_CACHE}" "${TRANSFORMERS_CACHE}" "${PYTHONPYCACHEPREFIX}" \
     "${FLASHINFER_WORKSPACE_BASE}" "${MPLCONFIGDIR}" "${WANDB_DIR}" \
     "${POLAR_SESSION_BASE_DIR}"
+if [ "${PRORL_DISABLE_NUMACTL_BIND}" = "1" ]; then
+    mkdir -p "${RUN_DIR}/runtime/bin"
+    cat > "${RUN_DIR}/runtime/bin/numactl" <<'EOF'
+#!/usr/bin/env bash
+args=()
+skip_next=0
+for arg in "$@"; do
+  if [ "${skip_next}" = "1" ]; then
+    skip_next=0
+    continue
+  fi
+  case "${arg}" in
+    --cpunodebind=*|--membind=*|--physcpubind=*|--preferred=*|--interleave=*)
+      ;;
+    --cpunodebind|--membind|--physcpubind|--preferred|--interleave)
+      skip_next=1
+      ;;
+    *)
+      args+=("${arg}")
+      ;;
+  esac
+done
+exec "${args[@]}"
+EOF
+    chmod +x "${RUN_DIR}/runtime/bin/numactl"
+    export PATH="${RUN_DIR}/runtime/bin:${PATH}"
+fi
 if [ -n "${PRORL_PROCESS_NAME}" ]; then
     mkdir -p "${PROCESS_TITLE_PYTHONPATH}"
     cat > "${PROCESS_TITLE_PYTHONPATH}/sitecustomize.py" <<'PY'
@@ -426,6 +454,8 @@ RAY_NUM_CPUS=${RAY_NUM_CPUS:-}
 LOAD_DEBUG_ROLLOUT_DATA=${LOAD_DEBUG_ROLLOUT_DATA}
 AGENT_HARNESS=${AGENT_HARNESS}
 AGENT_NPM_PACKAGE=${AGENT_NPM_PACKAGE}
+PRORL_DISABLE_NUMACTL_BIND=${PRORL_DISABLE_NUMACTL_BIND}
+PATH=${PATH}
 EOF
 
 cat > "${RUN_DIR}/monitor_host.sh" <<'EOF'
