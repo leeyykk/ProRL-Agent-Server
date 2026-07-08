@@ -36,9 +36,11 @@ MODEL_ARGS=(
     --hidden-size 2560
     --ffn-hidden-size 9216
     --use-gated-attention
+    --transformer-impl local
     --normalization RMSNorm
-    --apply-layernorm-1p
+    --no-persist-layer-norm
     --position-embedding-type rope
+    --no-rope-fusion
     --norm-epsilon 1e-6
     --rotary-percent 0.25
     --swiglu

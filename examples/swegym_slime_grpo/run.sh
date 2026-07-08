@@ -106,9 +106,11 @@ MODEL_ARGS=(
     --hidden-size 2560
     --ffn-hidden-size 9216
     --use-gated-attention
+    --transformer-impl local
     --normalization RMSNorm
-    --apply-layernorm-1p
+    --no-persist-layer-norm
     --position-embedding-type rope
+    --no-rope-fusion
     --norm-epsilon 1e-6
     --rotary-percent 0.25
     --swiglu
@@ -388,4 +390,17 @@ ray job submit --address="http://127.0.0.1:8265" \
     --sglang-tool-call-parser qwen3_coder \
     --router-policy "${SGLANG_ROUTER_POLICY:-round_robin}" \
     "${WANDB_ARGS[@]}" \
-    --sglang-router-port "$SGLANG_ROUTER_PORT"
+    --sglang-router-port "$SGLANG_ROUTER_PORT" \
+    --router-policy "${SGLANG_ROUTER_POLICY:-round_robin}" \
+    --disable-radix-cache \
+    --disable-cuda-graph \
+    --disable-piecewise-cuda-graph \
+    --disable-overlap-schedule \
+    --chunked-prefill-size -1 \
+    --mamba-backend triton \
+    --linear-attn-backend triton \
+    --linear-attn-decode-backend triton \
+    --linear-attn-prefill-backend triton \
+    --sampling-backend pytorch \
+    --grammar-backend none \
+    --disable-flashinfer-autotune \
