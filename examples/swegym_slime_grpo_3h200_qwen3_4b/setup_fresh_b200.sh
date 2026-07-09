@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
+SETUP_PROGRAM_NAME="${SETUP_PROGRAM_NAME:-$(basename "${BASH_SOURCE[0]}")}"
 cd "${PROJECT_ROOT}"
 
 WORK_ROOT="${WORK_ROOT:-}"
@@ -28,9 +29,9 @@ SKIP_CONVERT="${SKIP_CONVERT:-0}"
 SKIP_CODEX_INSTALL="${SKIP_CODEX_INSTALL:-0}"
 
 usage() {
-    cat <<'EOF'
+    cat <<EOF
 Usage:
-  setup_fresh_b200.sh --work-root PATH --run-root PATH --hf-checkpoint PATH [options]
+  ${SETUP_PROGRAM_NAME} --work-root PATH --run-root PATH --hf-checkpoint PATH [options]
 
 Required:
   --work-root PATH        Large writable env/artifact/cache directory.
