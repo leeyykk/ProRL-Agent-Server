@@ -72,10 +72,79 @@ protocol_path = root / "srt/entrypoints/openai/protocol.py"
 utils_path = root / "srt/entrypoints/openai/utils.py"
 serving_chat_path = root / "srt/entrypoints/openai/serving_chat.py"
 tokenizer_manager_path = root / "srt/managers/tokenizer_manager.py"
+scheduler_path = root / "srt/managers/scheduler.py"
 
-for path in (protocol_path, utils_path, serving_chat_path, tokenizer_manager_path):
+for path in (
+    protocol_path,
+    utils_path,
+    serving_chat_path,
+    tokenizer_manager_path,
+    scheduler_path,
+):
     if not path.exists():
         fail(f"Expected SGLang file is missing: {path}")
+
+# ---------------------------------------------------------------------------
+# scheduler.py — label scheduler-side GPU dispatches so Nsight can distinguish
+# rollout prefill/decode from Megatron training kernels.
+# ---------------------------------------------------------------------------
+scheduler_text = scheduler_path.read_text()
+scheduler_text = replace_once(
+    scheduler_text,
+    "_is_npu = is_npu()\n"
+    "\n"
+    "\n"
+    "@dataclass\n",
+    "_is_npu = is_npu()\n"
+    "\n"
+    "\n"
+    "def _prorl_nvtx_batch_range(batch):\n"
+    "    enabled = os.environ.get(\"PRORL_ENABLE_NVTX\", \"1\").lower() not in {\n"
+    "        \"0\",\n"
+    "        \"false\",\n"
+    "        \"no\",\n"
+    "        \"off\",\n"
+    "    }\n"
+    "    if not enabled or not torch.cuda.is_available():\n"
+    "        return nullcontext()\n"
+    "\n"
+    "    if batch.forward_mode.is_decode():\n"
+    "        phase = \"decode\"\n"
+    "    elif batch.forward_mode.is_extend():\n"
+    "        phase = \"prefill\"\n"
+    "    else:\n"
+    "        phase = \"forward\"\n"
+    "    return torch.cuda.nvtx.range(\n"
+    "        f\"sglang:{phase}:batch_size={batch.batch_size()}\"\n"
+    "    )\n"
+    "\n"
+    "\n"
+    "@dataclass\n",
+    label=str(scheduler_path),
+)
+scheduler_text = replace_once(
+    scheduler_text,
+    "            if batch:\n"
+    "                result = self.run_batch(batch)\n"
+    "                self.process_batch_result(batch, result)\n",
+    "            if batch:\n"
+    "                with _prorl_nvtx_batch_range(batch):\n"
+    "                    result = self.run_batch(batch)\n"
+    "                self.process_batch_result(batch, result)\n",
+    label=f"{scheduler_path}: normal event loop",
+)
+scheduler_text = replace_once(
+    scheduler_text,
+    "            if batch:\n"
+    "                batch_result = self.run_batch(batch)\n"
+    "                self.result_queue.append((batch.copy(), batch_result))\n",
+    "            if batch:\n"
+    "                with _prorl_nvtx_batch_range(batch):\n"
+    "                    batch_result = self.run_batch(batch)\n"
+    "                self.result_queue.append((batch.copy(), batch_result))\n",
+    label=f"{scheduler_path}: overlap event loop",
+)
+scheduler_path.write_text(scheduler_text)
 
 # ---------------------------------------------------------------------------
 # protocol.py — extend response schemas with token_id / token_ids / input_token_ids.

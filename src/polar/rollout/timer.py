@@ -6,6 +6,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from polar.profiling.nvtx import range_pop, range_push
 from polar.rollout.models import SessionTiming
 
 
@@ -21,12 +22,23 @@ class StageTimer:
 
     _marks: dict[str, float] = field(default_factory=dict)
     _wall_marks: dict[str, str] = field(default_factory=dict)
+    _nvtx_prefix: str = "polar"
+    _nvtx_stack: list[str] = field(default_factory=list)
+
+    def set_nvtx_prefix(self, prefix: str) -> None:
+        """Set the label prefix used for optional Nsight Systems ranges."""
+        self._nvtx_prefix = prefix
 
     def mark(self, stage: str, event: str) -> None:
         """Mark a stage start or finish."""
         key = f"{stage}_{event}"
         self._marks[key] = time.monotonic()
         self._wall_marks[key] = datetime.now(timezone.utc).isoformat()
+        self._mark_nvtx(stage, event)
+
+    def nvtx_label(self, label: str) -> str:
+        """Return a scoped NVTX label for finer-grained ranges."""
+        return f"{self._nvtx_prefix}:{label}"
 
     def to_session_timing(self) -> SessionTiming:
         """Return durations for the init/run/post-run lifecycle."""
@@ -73,3 +85,28 @@ class StageTimer:
         if not starts or not finishes:
             return 0.0
         return max(0.0, (max(finishes) - min(starts)) * 1000.0)
+
+    def _mark_nvtx(self, stage: str, event: str) -> None:
+        """Mirror lifecycle marks as NVTX ranges when profiling is enabled."""
+        if stage == "dispatch" and event == "started":
+            self._nvtx_push("queue", "queue")
+            return
+        if stage == "init" and event == "started":
+            self._nvtx_pop("queue")
+            self._nvtx_push("init", "init")
+            return
+        if event == "started":
+            self._nvtx_push(stage, stage)
+            return
+        if event == "finished":
+            self._nvtx_pop(stage)
+
+    def _nvtx_push(self, stage: str, label: str) -> None:
+        if range_push(self.nvtx_label(label)):
+            self._nvtx_stack.append(stage)
+
+    def _nvtx_pop(self, stage: str) -> None:
+        if not self._nvtx_stack or self._nvtx_stack[-1] != stage:
+            return
+        self._nvtx_stack.pop()
+        range_pop()

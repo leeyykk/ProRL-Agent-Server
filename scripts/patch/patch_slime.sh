@@ -12,6 +12,7 @@ SLIME_DIR="${1:-${SLIME_DIR:-${PROJECT_ROOT}/slime}}"
 PATCH_FILES=(
     "${SCRIPT_DIR}/slime_polar_async.patch"
     "${SCRIPT_DIR}/slime_qwen35_local_conversion.patch"
+    "${SCRIPT_DIR}/slime_nsys_nvtx.patch"
 )
 
 if [ ! -d "${SLIME_DIR}/.git" ]; then

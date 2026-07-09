@@ -1,0 +1,47 @@
+diff --git a/slime/utils/timer.py b/slime/utils/timer.py
+index ec1bdf7..5844708 100644
+--- a/slime/utils/timer.py
++++ b/slime/utils/timer.py
+@@ -5,6 +5,8 @@ from time import time
+ 
+ import torch.distributed
+ 
++from polar.profiling.nvtx import nvtx_range
++
+ from .misc import SingletonMeta
+ 
+ __all__ = ["Timer", "timer"]
+@@ -45,11 +47,12 @@ class Timer(metaclass=SingletonMeta):
+ 
+     @contextmanager
+     def context(self, name):
+-        self.start(name)
+-        try:
+-            yield
+-        finally:
+-            self.end(name)
++        with nvtx_range(f"slime:{name}"):
++            self.start(name)
++            try:
++                yield
++            finally:
++                self.end(name)
+ 
+ 
+ def timer(name_or_func):
+@@ -83,10 +86,11 @@ def timer(name_or_func):
+ @contextmanager
+ def inverse_timer(name):
+     Timer().end(name)
+-    try:
+-        yield
+-    finally:
+-        Timer().start(name)
++    with nvtx_range(f"slime:{name}:inactive"):
++        try:
++            yield
++        finally:
++            Timer().start(name)
+ 
+ 
+ def with_defer(deferred_func):

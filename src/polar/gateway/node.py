@@ -22,6 +22,7 @@ from polar.gateway.storage import SessionStore
 from polar.agent.base import BaseHarness
 from polar.agent.factory import create_harness
 from polar.agent.models import AgentRunResult
+from polar.profiling.nvtx import nvtx_range
 from polar.rollout.models import (
     NodeHeartbeatRequest,
     NodeRegistrationRequest,
@@ -189,6 +190,7 @@ class GatewayNodeManager:
             )
 
             timer = StageTimer()
+            timer.set_nvtx_prefix(self._session_nvtx_prefix(request))
             timer.mark("dispatch", "started")
             session_dir = Path(
                 mkdtemp(prefix=f"session-{session_id[:8]}-", dir=self._session_base_dir)
@@ -231,6 +233,18 @@ class GatewayNodeManager:
         if status is not None:
             self.session_registry.set_status(managed.request.session_id, status)
 
+    @staticmethod
+    def _session_nvtx_prefix(request: SessionDispatchRequest) -> str:
+        metadata = dict(request.metadata)
+        group_id = metadata.get("group_id", "?")
+        rollout_step = metadata.get("rollout_step", "?")
+        policy_version = metadata.get("policy_version", "?")
+        session_short = request.session_id[:8]
+        return (
+            "polar:"
+            f"g{group_id}:step{rollout_step}:v{policy_version}:s{session_short}"
+        )
+
     # ------------------------------------------------------------------
     # INIT stage
     # ------------------------------------------------------------------
@@ -243,9 +257,11 @@ class GatewayNodeManager:
             runtime_spec = self._resolve_runtime_spec(request)
             runtime = create_runtime(runtime_spec, request.session_id, managed.session_dir)
             managed.runtime = runtime
-            await self._await_with_budget(runtime.start(), managed)
+            with nvtx_range(managed.timer.nvtx_label("init:runtime_start")):
+                await self._await_with_budget(runtime.start(), managed)
             # Run ordered prepare actions
-            await self._run_runtime_prepare(runtime, runtime_spec, request, managed)
+            with nvtx_range(managed.timer.nvtx_label("init:prepare")):
+                await self._run_runtime_prepare(runtime, runtime_spec, request, managed)
         except GatewayExecutionTimeout as exc:
             managed.final_result = self._timeout_result(request, managed.timer, str(exc))
         except Exception as exc:
@@ -287,18 +303,27 @@ class GatewayNodeManager:
             if managed.cancel_requested:
                 return
             if action.type == "upload_file":
-                await runtime.upload_file(action.source, action.target)
+                with nvtx_range(
+                    managed.timer.nvtx_label(f"{log_prefix}:{i:02d}:upload_file")
+                ):
+                    await runtime.upload_file(action.source, action.target)
             elif action.type == "upload_dir":
-                await runtime.upload_dir(action.source, action.target)
+                with nvtx_range(
+                    managed.timer.nvtx_label(f"{log_prefix}:{i:02d}:upload_dir")
+                ):
+                    await runtime.upload_dir(action.source, action.target)
             elif action.type == "exec":
                 merged_env = {**base_env, **(action.env or {})}
                 effective_cwd = action.cwd or runtime.runtime_session_dir
-                result = await runtime.exec(
-                    action.command,
-                    cwd=effective_cwd,
-                    env=merged_env,
-                    timeout_sec=self._remaining_budget(managed),
-                )
+                with nvtx_range(
+                    managed.timer.nvtx_label(f"{log_prefix}:{i:02d}:exec")
+                ):
+                    result = await runtime.exec(
+                        action.command,
+                        cwd=effective_cwd,
+                        env=merged_env,
+                        timeout_sec=self._remaining_budget(managed),
+                    )
                 log_dir = managed.session_dir / "logs"
                 log_dir.mkdir(parents=True, exist_ok=True)
                 self._write_exec_log(
@@ -327,20 +352,28 @@ class GatewayNodeManager:
             if runtime is None:
                 raise RuntimeError("runtime is required for execution")
 
-            self._start_eval_prewarm(managed)
-            harness = self._resolve_agent_harness(request)
+            with nvtx_range(managed.timer.nvtx_label("run:eval_prewarm_start")):
+                self._start_eval_prewarm(managed)
+            with nvtx_range(managed.timer.nvtx_label("run:resolve_harness")):
+                harness = self._resolve_agent_harness(request)
 
             # Setup
-            await self._await_with_budget(harness.setup(runtime), managed)
+            with nvtx_range(managed.timer.nvtx_label("run:harness_setup")):
+                await self._await_with_budget(harness.setup(runtime), managed)
 
             # Run
-            steps = harness.run_steps(request.instruction)
-            env = self._runtime_env(request, managed, include_agent_env=True)
-            agent_result = await self._run_exec_inputs(runtime, steps, env, managed)
+            with nvtx_range(managed.timer.nvtx_label("run:harness_steps")):
+                steps = harness.run_steps(request.instruction)
+                env = self._runtime_env(request, managed, include_agent_env=True)
+            with nvtx_range(managed.timer.nvtx_label("run:agent_exec")):
+                agent_result = await self._run_exec_inputs(runtime, steps, env, managed)
 
             # Postprocess always runs so harnesses can collect artifacts from
             # failed or timed-out agent runs before post-run evaluation.
-            await self._await_with_budget(harness.postprocess(runtime, agent_result), managed)
+            with nvtx_range(managed.timer.nvtx_label("run:harness_postprocess")):
+                await self._await_with_budget(
+                    harness.postprocess(runtime, agent_result), managed
+                )
             managed.agent_result = agent_result
 
         except GatewayExecutionTimeout as exc:
@@ -384,12 +417,13 @@ class GatewayNodeManager:
                     status="failed", return_code=-1, error="cancelled"
                 )
             merged_env = {**env, **(step.env or {})}
-            result = await runtime.exec(
-                step.command,
-                cwd=step.cwd,
-                env=merged_env,
-                timeout_sec=self._remaining_budget(managed),
-            )
+            with nvtx_range(managed.timer.nvtx_label(f"run:agent_step:{i:02d}")):
+                result = await runtime.exec(
+                    step.command,
+                    cwd=step.cwd,
+                    env=merged_env,
+                    timeout_sec=self._remaining_budget(managed),
+                )
             self._write_exec_log(
                 log_dir, f"step.{i:02d}", result.stdout, result.stderr
             )
@@ -443,20 +477,22 @@ class GatewayNodeManager:
             runtime_spec, f"{request.session_id}-eval", eval_session_dir
         )
         try:
-            await self._await_with_budget(eval_runtime.start(), managed)
+            with nvtx_range(managed.timer.nvtx_label("eval_prewarm:runtime_start")):
+                await self._await_with_budget(eval_runtime.start(), managed)
             eval_actions = (
                 runtime_spec.eval_prepare
                 if runtime_spec.eval_prepare is not None
                 else runtime_spec.prepare
             )
-            await self._run_runtime_prepare(
-                eval_runtime,
-                runtime_spec,
-                request,
-                managed,
-                actions=eval_actions,
-                log_prefix="eval_prepare",
-            )
+            with nvtx_range(managed.timer.nvtx_label("eval_prewarm:prepare")):
+                await self._run_runtime_prepare(
+                    eval_runtime,
+                    runtime_spec,
+                    request,
+                    managed,
+                    actions=eval_actions,
+                    log_prefix="eval_prepare",
+                )
             return eval_runtime
         except asyncio.CancelledError:
             with suppress(Exception):
@@ -524,9 +560,11 @@ class GatewayNodeManager:
         finally:
             managed.timer.mark("postrun", "finished")
             managed.timer.mark("teardown", "started")
-            await self._run_postrun_steps(managed)
+            with nvtx_range(managed.timer.nvtx_label("teardown:postrun_steps")):
+                await self._run_postrun_steps(managed)
             stop_tasks = []
-            eval_runtime = await self._drain_eval_prewarm_task(managed)
+            with nvtx_range(managed.timer.nvtx_label("teardown:drain_eval_prewarm")):
+                eval_runtime = await self._drain_eval_prewarm_task(managed)
             if eval_runtime is not None:
                 stop_tasks.append(
                     self._stop_runtime_best_effort(
@@ -540,7 +578,8 @@ class GatewayNodeManager:
                     )
                 )
             if stop_tasks:
-                await asyncio.gather(*stop_tasks, return_exceptions=True)
+                with nvtx_range(managed.timer.nvtx_label("teardown:runtime_stop")):
+                    await asyncio.gather(*stop_tasks, return_exceptions=True)
             managed.timer.mark("teardown", "finished")
             managed.timer.mark("return", "finished")
 
@@ -592,10 +631,11 @@ class GatewayNodeManager:
         self.session_registry.set_status(request.session_id, SessionStatus.BUILDING)
         managed.timer.mark("build", "started")
         try:
-            trajectory = await self._await_with_budget(
-                asyncio.to_thread(self._build_trajectory, request),
-                managed,
-            )
+            with nvtx_range(managed.timer.nvtx_label("build:trajectory")):
+                trajectory = await self._await_with_budget(
+                    asyncio.to_thread(self._build_trajectory, request),
+                    managed,
+                )
         finally:
             managed.timer.mark("build", "finished")
 
@@ -674,7 +714,8 @@ class GatewayNodeManager:
 
         fresh_eval_runtime: BaseRuntime | None = None
         if evaluator_spec.refresh_runtime:
-            fresh_eval_runtime = await self._acquire_prepared_eval_runtime(managed)
+            with nvtx_range(managed.timer.nvtx_label("eval:acquire_runtime")):
+                fresh_eval_runtime = await self._acquire_prepared_eval_runtime(managed)
             if fresh_eval_runtime is None:
                 return trajectory.model_copy(
                     update={
@@ -690,24 +731,26 @@ class GatewayNodeManager:
         )
 
         try:
-            evaluator = self.evaluators.create(strategy_spec)
-            eval_result = await self._await_with_budget(
-                evaluator.evaluate(
-                    trajectory,
-                    session_id=request.session_id,
-                    task_id=request.task_id,
-                    session_dir=managed.session_dir,
-                    artifacts_dir=managed.artifacts_dir,
-                    agent_result=agent_result,
-                    env=dict(evaluator_spec.env),
-                    timeout_seconds=self._remaining_budget(managed),
-                    runtime=live_runtime,
-                    fresh_eval_runtime=fresh_eval_runtime,
-                    runtime_spec=request.runtime or self.default_runtime,
-                    refresh_runtime=evaluator_spec.refresh_runtime,
-                ),
-                managed,
-            )
+            with nvtx_range(managed.timer.nvtx_label("eval:create_evaluator")):
+                evaluator = self.evaluators.create(strategy_spec)
+            with nvtx_range(managed.timer.nvtx_label("eval:evaluate")):
+                eval_result = await self._await_with_budget(
+                    evaluator.evaluate(
+                        trajectory,
+                        session_id=request.session_id,
+                        task_id=request.task_id,
+                        session_dir=managed.session_dir,
+                        artifacts_dir=managed.artifacts_dir,
+                        agent_result=agent_result,
+                        env=dict(evaluator_spec.env),
+                        timeout_seconds=self._remaining_budget(managed),
+                        runtime=live_runtime,
+                        fresh_eval_runtime=fresh_eval_runtime,
+                        runtime_spec=request.runtime or self.default_runtime,
+                        refresh_runtime=evaluator_spec.refresh_runtime,
+                    ),
+                    managed,
+                )
         except Exception as exc:
             logger.exception(
                 "Evaluator %s failed for session %s",
@@ -943,12 +986,15 @@ class GatewayNodeManager:
         for i, step in enumerate(managed.postrun_steps):
             try:
                 merged_env = {**env, **(step.env or {})}
-                result = await managed.runtime.exec(
-                    step.command,
-                    cwd=step.cwd,
-                    env=merged_env,
-                    timeout_sec=self._remaining_budget(managed),
-                )
+                with nvtx_range(
+                    managed.timer.nvtx_label(f"teardown:postrun_step:{i:02d}")
+                ):
+                    result = await managed.runtime.exec(
+                        step.command,
+                        cwd=step.cwd,
+                        env=merged_env,
+                        timeout_sec=self._remaining_budget(managed),
+                    )
                 self._write_exec_log(
                     log_dir,
                     f"step.{i:02d}",

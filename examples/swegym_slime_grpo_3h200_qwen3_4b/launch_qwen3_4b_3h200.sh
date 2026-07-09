@@ -68,6 +68,8 @@ export POLAR_PRESERVE_SESSION_DIRS="${POLAR_PRESERVE_SESSION_DIRS:-0}"
 export PRORL_KILL_STALE_RAY_PROCESSES="${PRORL_KILL_STALE_RAY_PROCESSES:-0}"
 export PRORL_GLOBAL_RAY_STOP="${PRORL_GLOBAL_RAY_STOP:-0}"
 export POLAR_MAX_COMPLETION_TOKENS="${POLAR_MAX_COMPLETION_TOKENS:-1024}"
+export SLIME_RESPECT_CUDA_VISIBLE_DEVICES_ORDER="${SLIME_RESPECT_CUDA_VISIBLE_DEVICES_ORDER:-1}"
+export SLIME_ROLLOUT_USE_RAY_CUDA_VISIBLE_DEVICES="${SLIME_ROLLOUT_USE_RAY_CUDA_VISIBLE_DEVICES:-1}"
 export SGLANG_ENABLE_JIT_DEEPGEMM="${SGLANG_ENABLE_JIT_DEEPGEMM:-0}"
 export SGLANG_BATCH_INVARIANT_OPS_ENABLE_MM_DEEPGEMM="${SGLANG_BATCH_INVARIANT_OPS_ENABLE_MM_DEEPGEMM:-0}"
 export PRORL_DISABLE_NUMACTL_BIND="${PRORL_DISABLE_NUMACTL_BIND:-0}"
@@ -96,6 +98,7 @@ if [ -n "${PRORL_PROCESS_NAME}" ]; then
     PROCESS_TITLE_PYTHONPATH="${RUN_DIR}/runtime/process_title"
 fi
 export PYTHONPATH="${PROCESS_TITLE_PYTHONPATH:+${PROCESS_TITLE_PYTHONPATH}:}${MEGATRON_DIR}:${SLIME_DIR}:${PROJECT_ROOT}/src"
+SELECTED_GPU_COUNT="$(echo "${SELECTED_GPUS}" | awk -F, '{print NF}')"
 
 mkdir -p "${RUN_DIR}/logs" "${TMPDIR}" "${RAY_TMPDIR}" "${HF_HOME}" \
     "${HF_HUB_CACHE}" "${TRANSFORMERS_CACHE}" "${PYTHONPYCACHEPREFIX}" \
@@ -649,6 +652,7 @@ set +e
 CUDA_VISIBLE_DEVICES="${SELECTED_GPUS}" RAY_ADDRESS="${RAY_ADDRESS_URI}" "${PYTHON_BIN}" "${SLIME_DIR}/train_async.py" \
     --actor-num-nodes 1 \
     --actor-num-gpus-per-node 2 \
+    --num-gpus-per-node "${SELECTED_GPU_COUNT}" \
     --rollout-num-gpus 1 \
     --rollout-num-gpus-per-engine 1 \
     "${DEBUG_ROLLOUT_ARGS[@]}" \
@@ -718,6 +722,7 @@ CUDA_VISIBLE_DEVICES="${SELECTED_GPUS}" RAY_ADDRESS="${RAY_ADDRESS_URI}" "${PYTH
     --accumulate-allreduce-grads-in-fp32 \
     --attention-softmax-in-fp32 \
     --attention-backend "${ATTENTION_BACKEND}" \
+    --no-masked-softmax-fusion \
     --no-gradient-accumulation-fusion \
     --sglang-mem-fraction-static "${SGLANG_MEM_FRACTION_STATIC}" \
     --sglang-context-length "${SGLANG_CONTEXT_LENGTH}" \
