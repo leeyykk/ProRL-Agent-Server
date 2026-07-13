@@ -164,6 +164,9 @@ class ApptainerRuntime(BaseRuntime):
 
     def _exec_args(self) -> list[str]:
         args = [self._binary, "exec"]
+        extra_args = os.environ.get("POLAR_APPTAINER_EXEC_ARGS", "")
+        if extra_args:
+            args.extend(shlex.split(extra_args))
         if self.spec.gpus > 0:
             args.append("--nv")
         network_name = "none" if not self.spec.allow_internet else self.spec.network

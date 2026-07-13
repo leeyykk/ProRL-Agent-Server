@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import shutil
 from contextlib import suppress
 from pathlib import Path
@@ -1029,6 +1030,9 @@ class GatewayNodeManager:
         session_dir: Path,
         session_id: str,
     ) -> None:
+        if os.environ.get("POLAR_PRESERVE_SESSION_DIRS") == "1":
+            logger.info("Preserving session directory for session %s: %s", session_id, session_dir)
+            return
         try:
             await asyncio.to_thread(shutil.rmtree, session_dir)
         except FileNotFoundError:

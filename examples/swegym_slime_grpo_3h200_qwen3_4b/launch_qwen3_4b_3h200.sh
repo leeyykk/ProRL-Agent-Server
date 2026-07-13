@@ -5,13 +5,13 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 cd "${PROJECT_ROOT}"
 
-WORK_ROOT="${WORK_ROOT:-/work1/yokyung/prorl_agent_server_env}"
-RUN_ROOT="${RUN_ROOT:-/home/yokyung/prorl_agent_server_runs/swegym_slime_grpo_3h200}"
+WORK_ROOT="${WORK_ROOT:-/NHNHOME/home/prorl_agent_server_env}"
+RUN_ROOT="${RUN_ROOT:-/NHNHOME/home/prorl_agent_server_runs/swegym_slime_grpo_3h200}"
 PYTHON_BIN="${PYTHON_BIN:-${PROJECT_ROOT}/.venv/bin/python}"
 RAY_BIN="${RAY_BIN:-${PROJECT_ROOT}/.venv/bin/ray}"
 SLIME_DIR="${SLIME_DIR:-${PROJECT_ROOT}/slime}"
 MEGATRON_DIR="${MEGATRON_DIR:-${PROJECT_ROOT}/Megatron-LM}"
-HF_CHECKPOINT="${HF_CHECKPOINT:-/work1/huggingface_models/Qwen3-4B}"
+HF_CHECKPOINT="${HF_CHECKPOINT:-/NHNHOME/home/huggingface_models/Qwen3.5-4B}"
 MODEL_FLAVOR="${MODEL_FLAVOR:-}"
 if [ -z "${MODEL_FLAVOR}" ]; then
     case "${HF_CHECKPOINT}" in
@@ -20,7 +20,7 @@ if [ -z "${MODEL_FLAVOR}" ]; then
     esac
 fi
 if [ "${MODEL_FLAVOR}" = "qwen35_4b" ]; then
-    DEFAULT_TORCH_DIST_DIR="${WORK_ROOT}/checkpoints/Qwen3.5-4B_torch_dist"
+    DEFAULT_TORCH_DIST_DIR="${WORK_ROOT}/checkpoints/Qwen3.5-4B_torch_dist_tp2"
     DEFAULT_RUN_PREFIX="qwen35_4b_3h200"
 else
     DEFAULT_TORCH_DIST_DIR="${WORK_ROOT}/checkpoints/Qwen3-4B_torch_dist"
@@ -32,10 +32,10 @@ RUN_STEM="${RUN_STEM:-$(printf '%s' "${RUN_ID}" | sha1sum | awk '{print $1}' | c
 TORCH_DIST_DIR="${TORCH_DIST_DIR:-${DEFAULT_TORCH_DIST_DIR}}"
 REF_LOAD="${REF_LOAD:-${TORCH_DIST_DIR}}"
 SAVE_DIR="${SAVE_DIR:-${RUN_DIR}/checkpoints}"
-SWEGYM_DATA="${SWEGYM_DATA:-${WORK_ROOT}/data/swegym_train_docker_3h200.jsonl}"
+SWEGYM_DATA="${SWEGYM_DATA:-${WORK_ROOT}/data/swegym_train_apptainer_3h200.jsonl}"
 TOPOLOGY_TEMPLATE="${TOPOLOGY_TEMPLATE:-${SCRIPT_DIR}/topology.docker_3h200.yaml}"
 POLAR_CONFIG_TEMPLATE="${POLAR_CONFIG_TEMPLATE:-${SCRIPT_DIR}/polar_config.docker_3h200.yaml}"
-RUNTIME_BACKEND="${RUNTIME_BACKEND:-}"
+RUNTIME_BACKEND="${RUNTIME_BACKEND:-apptainer}"
 TOPOLOGY_PATH="${RUN_DIR}/topology.yaml"
 POLAR_CONFIG_PATH="${RUN_DIR}/polar_config.yaml"
 SGLANG_ROUTER_HOST="${SGLANG_ROUTER_HOST:-$(hostname -I | awk '{print $NF}')}"
@@ -53,10 +53,13 @@ fi
 
 export CUDA_DEVICE_ORDER="${CUDA_DEVICE_ORDER:-PCI_BUS_ID}"
 export CUDA_VISIBLE_DEVICES="${SELECTED_GPUS}"
-export TMPDIR="${TMPDIR:-/tmp/prorl_tmp_${RUN_STEM}}"
+SHORT_TMP_ROOT="${SHORT_TMP_ROOT:-${WORK_ROOT%/*}}"
+export TMPDIR="${TMPDIR:-${SHORT_TMP_ROOT}/tmp_${RUN_STEM}}"
 export TEMP="${TMPDIR}"
 export TMP="${TMPDIR}"
-export RAY_TMPDIR="${RAY_TMPDIR:-/tmp/prorl_ray_${RUN_STEM}}"
+export RAY_TMPDIR="${RAY_TMPDIR:-${SHORT_TMP_ROOT}/ray_${RUN_STEM}}"
+export TORCHINDUCTOR_CACHE_DIR="${TORCHINDUCTOR_CACHE_DIR:-${TMPDIR}/torchinductor}"
+export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-${TMPDIR}/triton}"
 RAY_PORT="${RAY_PORT:-}"
 export HF_HOME="${WORK_ROOT}/hf-home"
 export HF_HUB_CACHE="${WORK_ROOT}/hf-hub-cache"
@@ -173,6 +176,46 @@ if [ ! -f "${SWEGYM_DATA}" ]; then
     echo "Run prepare_swegym_docker_data.sh or prepare_swegym_apptainer_data_b200.sh first." >&2
     exit 1
 fi
+if [ "${RUNTIME_BACKEND}" = "apptainer" ]; then
+    if [ -z "${POLAR_APPTAINER_BIN:-}" ]; then
+        if command -v apptainer >/dev/null 2>&1; then
+            POLAR_APPTAINER_BIN="$(command -v apptainer)"
+        elif command -v singularity >/dev/null 2>&1; then
+            POLAR_APPTAINER_BIN="$(command -v singularity)"
+        else
+            POLAR_APPTAINER_BIN="apptainer"
+        fi
+    fi
+    if ! command -v "${POLAR_APPTAINER_BIN}" >/dev/null 2>&1; then
+        echo "ERROR: RUNTIME_BACKEND=apptainer but Apptainer/Singularity is not available: ${POLAR_APPTAINER_BIN}" >&2
+        echo "Set POLAR_APPTAINER_BIN=/absolute/path/to/apptainer-or-singularity." >&2
+        exit 1
+    fi
+    if [ -z "${POLAR_APPTAINER_EXEC_ARGS:-}" ] && [ "$(basename "${POLAR_APPTAINER_BIN}")" = "singularity" ]; then
+        POLAR_APPTAINER_EXEC_ARGS="--userns"
+    fi
+    export POLAR_APPTAINER_BIN POLAR_APPTAINER_EXEC_ARGS
+    APPTAINER_PREFLIGHT_IMAGE="$(${PYTHON_BIN} - "${SWEGYM_DATA}" <<PY
+import json
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+with path.open() as f:
+    row = json.loads(f.readline())
+image = (row.get("metadata") or {}).get("runtime_image")
+if image:
+    print(image)
+PY
+)"
+    if [ -n "${APPTAINER_PREFLIGHT_IMAGE}" ]; then
+        read -r -a APPTAINER_PREFLIGHT_ARGS <<<"${POLAR_APPTAINER_EXEC_ARGS:-}"
+        if ! "${POLAR_APPTAINER_BIN}" exec "${APPTAINER_PREFLIGHT_ARGS[@]}" "${APPTAINER_PREFLIGHT_IMAGE}" true >/dev/null 2>"${RUN_DIR}/logs/apptainer_preflight.err"; then
+            echo "ERROR: Apptainer is present but cannot execute SWE-Gym SIF: ${APPTAINER_PREFLIGHT_IMAGE}" >&2
+            echo "See ${RUN_DIR}/logs/apptainer_preflight.err" >&2
+            exit 1
+        fi
+    fi
+fi
 
 MAX_PRELAUNCH_GPU_MEM_MIB="${MAX_PRELAUNCH_GPU_MEM_MIB:-1024}"
 HOST_MIN_AVAILABLE_GIB="${HOST_MIN_AVAILABLE_GIB:-120}"
@@ -278,13 +321,13 @@ POLAR_MAX_RUN_WORKERS="${POLAR_MAX_RUN_WORKERS:-1}"
 POLAR_MAX_POSTRUN_WORKERS="${POLAR_MAX_POSTRUN_WORKERS:-1}"
 POLAR_MAX_ASYNC_LEVEL="${POLAR_MAX_ASYNC_LEVEL:-1}"
 POLAR_MIN_COMPLETE_ACCEPT_FRACTION="${POLAR_MIN_COMPLETE_ACCEPT_FRACTION:-}"
-AGENT_HARNESS="${AGENT_HARNESS:-qwen_code}"
+AGENT_HARNESS="${AGENT_HARNESS:-codex}"
 case "${AGENT_HARNESS}" in
     qwen_code) AGENT_NPM_PACKAGE="${AGENT_NPM_PACKAGE:-@qwen-code/qwen-code@0.14.5}" ;;
     codex) AGENT_NPM_PACKAGE="${AGENT_NPM_PACKAGE:-@openai/codex@0.121.0}" ;;
     *) echo "ERROR: unsupported AGENT_HARNESS=${AGENT_HARNESS}" >&2; exit 1 ;;
 esac
-PREINSTALLED_AGENT_CLI="${PREINSTALLED_AGENT_CLI:-}"
+PREINSTALLED_AGENT_CLI="${PREINSTALLED_AGENT_CLI:-${WORK_ROOT}/agent_cli/codex_0.121.0}"
 "${PYTHON_BIN}" - <<PY
 from pathlib import Path
 import yaml
@@ -320,6 +363,11 @@ prepare_steps = runtime.get("prepare") or []
 for step in prepare_steps:
     if isinstance(step, dict) and "command" in step:
         command = str(step["command"])
+        if runtime.get("backend") == "apptainer":
+            command = command.replace(
+                "cp -a /testbed/. /polar/session/workspace/",
+                "cp -R /testbed/. /polar/session/workspace/",
+            )
         if "${PREINSTALLED_AGENT_CLI}" and "${AGENT_HARNESS}" == "codex":
             command = command.replace(
                 "npm install -g --no-audit --no-fund @qwen-code/qwen-code@0.14.5",

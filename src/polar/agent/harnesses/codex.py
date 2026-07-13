@@ -58,7 +58,7 @@ class CodexHarness(BaseHarness):
             )
 
     def run_steps(self, instruction: str) -> list[ExecInput]:
-        escaped = shlex.quote(instruction)
+        escaped = shlex.quote(_workspace_pinned_instruction(instruction))
         env: dict[str, str] = {
             **self.env,
             "CODEX_HOME": self._codex_home,
@@ -111,6 +111,27 @@ class CodexHarness(BaseHarness):
                 env=env,
             ),
         ]
+
+
+def _workspace_pinned_instruction(instruction: str) -> str:
+    return f"""You are already inside the benchmark repository workspace.
+
+Important execution rules:
+- Treat the current working directory as the repository to fix.
+- Modify files in the current working directory only.
+- Do not clone the issue reproduction repository or any linked repository as
+  your working tree. External links in the problem statement are reference
+  material only.
+- Do not end with only analysis or a plan. Continue working until you have
+  edited at least one tracked file in the current repository.
+- Before finishing, run `git diff --stat` and ensure it is non-empty. The
+  evaluator will collect `git diff` from this directory.
+- If tests or reproduction steps are unavailable, still make the best targeted
+  source-code fix you can infer from the repository and problem statement.
+
+Task:
+{instruction}
+"""
 
 
 def _cli_model_name(model_name: str | None) -> str:
