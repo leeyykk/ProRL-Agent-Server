@@ -38,10 +38,12 @@ POLAR_CONFIG_TEMPLATE="${POLAR_CONFIG_TEMPLATE:-${SCRIPT_DIR}/polar_config.docke
 RUNTIME_BACKEND="${RUNTIME_BACKEND:-}"
 TOPOLOGY_PATH="${RUN_DIR}/topology.yaml"
 POLAR_CONFIG_PATH="${RUN_DIR}/polar_config.yaml"
-SGLANG_ROUTER_HOST="${SGLANG_ROUTER_HOST:-$(hostname -I | awk '{print $1}')}"
+SGLANG_ROUTER_HOST="${SGLANG_ROUTER_HOST:-$(hostname -I | awk '{print $NF}')}"
 SELECTED_GPUS="${SELECTED_GPUS:-0,1,2}"
 TRAIN_GPUS="${TRAIN_GPUS:-$(echo "${SELECTED_GPUS}" | cut -d, -f1,2)}"
 ROLLOUT_GPU="${ROLLOUT_GPU:-$(echo "${SELECTED_GPUS}" | cut -d, -f3)}"
+GPU_MONITOR_INTERVAL_SECONDS="${GPU_MONITOR_INTERVAL_SECONDS:-1}"
+GPU_IDLE_UTIL_THRESHOLD="${GPU_IDLE_UTIL_THRESHOLD:-10}"
 DEBUG_ROLLOUT_ONLY="${DEBUG_ROLLOUT_ONLY:-0}"
 LOAD_DEBUG_ROLLOUT_DATA="${LOAD_DEBUG_ROLLOUT_DATA:-}"
 if [ "${DEBUG_ROLLOUT_ONLY}" = "1" ]; then
@@ -72,11 +74,12 @@ export SLIME_RESPECT_CUDA_VISIBLE_DEVICES_ORDER="${SLIME_RESPECT_CUDA_VISIBLE_DE
 export SLIME_ROLLOUT_USE_RAY_CUDA_VISIBLE_DEVICES="${SLIME_ROLLOUT_USE_RAY_CUDA_VISIBLE_DEVICES:-1}"
 export SGLANG_ENABLE_JIT_DEEPGEMM="${SGLANG_ENABLE_JIT_DEEPGEMM:-0}"
 export SGLANG_BATCH_INVARIANT_OPS_ENABLE_MM_DEEPGEMM="${SGLANG_BATCH_INVARIANT_OPS_ENABLE_MM_DEEPGEMM:-0}"
-export PRORL_DISABLE_NUMACTL_BIND="${PRORL_DISABLE_NUMACTL_BIND:-0}"
+export SGLANG_NUMA_BIND_V2="${SGLANG_NUMA_BIND_V2:-0}"
+export PRORL_DISABLE_NUMACTL_BIND="${PRORL_DISABLE_NUMACTL_BIND:-1}"
 export NCCL_P2P_DISABLE="${NCCL_P2P_DISABLE:-1}"
 NVIDIA_SITE_PACKAGES="${PROJECT_ROOT}/.venv/lib/python3.12/site-packages/nvidia"
 TORCH_LIBRARY_DIR="${PROJECT_ROOT}/.venv/lib/python3.12/site-packages/torch/lib"
-export CUDA_HOME="${CUDA_HOME:-/usr/local/cuda-13.0}"
+export CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}"
 LIBRARY_PATHS=()
 if [ -d "${TORCH_LIBRARY_DIR}" ]; then
     LIBRARY_PATHS+=("${TORCH_LIBRARY_DIR}")
@@ -428,6 +431,16 @@ cleanup() {
 }
 trap cleanup EXIT
 
+PHASE_FILE="${RUN_DIR}/monitor.phase"
+phase_mark() {
+    local phase="$1"
+    local detail="${2:-}"
+    printf '%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${phase}" "${detail}" >> "${RUN_DIR}/phase_events.tsv"
+    printf '%s\t%s\n' "${phase}" "${detail}" > "${PHASE_FILE}"
+}
+
+phase_mark "configure" "writing run settings"
+
 cat > "${RUN_DIR}/run_settings.txt" <<EOF
 RUN_DIR=${RUN_DIR}
 WORK_ROOT=${WORK_ROOT}
@@ -470,6 +483,8 @@ LOAD_DEBUG_ROLLOUT_DATA=${LOAD_DEBUG_ROLLOUT_DATA}
 AGENT_HARNESS=${AGENT_HARNESS}
 AGENT_NPM_PACKAGE=${AGENT_NPM_PACKAGE}
 PRORL_DISABLE_NUMACTL_BIND=${PRORL_DISABLE_NUMACTL_BIND}
+GPU_MONITOR_INTERVAL_SECONDS=${GPU_MONITOR_INTERVAL_SECONDS}
+GPU_IDLE_UTIL_THRESHOLD=${GPU_IDLE_UTIL_THRESHOLD}
 PATH=${PATH}
 EOF
 
@@ -478,20 +493,115 @@ cat > "${RUN_DIR}/monitor_host.sh" <<'EOF'
 set -euo pipefail
 OUT="$1"
 STOP="$2"
+PHASE_FILE="$3"
+SELECTED="$4"
+INTERVAL="$5"
+PYTHON_BIN="$6"
+IDLE_THRESHOLD="$7"
+if [ ! -f "$OUT" ]; then
+  printf 'timestamp,phase,detail,gpu,memory_used_mib,memory_total_mib,util_gpu_pct,is_idle,compute_apps\n' > "$OUT"
+fi
 while [ ! -f "$STOP" ]; do
-  ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  mem="$(free -g | awk '/Mem:/ {print $3","$2","$7}')"
-  gpu="$(nvidia-smi --query-gpu=index,memory.used,memory.total,utilization.gpu --format=csv,noheader,nounits | tr '\n' ';')"
-  docker="$(docker stats --no-stream --format '{{.Name}},{{.MemUsage}},{{.CPUPerc}}' 2>/dev/null | tr '\n' ';' || true)"
-  printf '%s host_mem_used_total_avail_gib=%s gpu="%s" docker="%s"\n' "$ts" "$mem" "$gpu" "$docker" >> "$OUT"
-  sleep 5
+  "$PYTHON_BIN" - "$OUT" "$PHASE_FILE" "$SELECTED" "$IDLE_THRESHOLD" <<'PY_SAMPLE'
+import csv
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+out = Path(sys.argv[1])
+phase_file = Path(sys.argv[2])
+selected = {x.strip() for x in sys.argv[3].split(",") if x.strip()}
+idle_threshold = float(sys.argv[4])
+phase = "unknown"
+detail = ""
+try:
+    text = phase_file.read_text().strip()
+    if text:
+        parts = text.split("\t", 1)
+        phase = parts[0]
+        detail = parts[1] if len(parts) > 1 else ""
+except FileNotFoundError:
+    pass
+
+def run_query(args):
+    proc = subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    return proc.stdout if proc.returncode == 0 else ""
+
+gpu_text = run_query([
+    "nvidia-smi",
+    "--query-gpu=index,uuid,memory.used,memory.total,utilization.gpu",
+    "--format=csv,noheader,nounits",
+])
+apps_text = run_query([
+    "nvidia-smi",
+    "--query-compute-apps=gpu_uuid,pid,process_name,used_memory",
+    "--format=csv,noheader,nounits",
+])
+
+apps_by_uuid = {}
+for line in apps_text.splitlines():
+    parts = [p.strip() for p in line.split(",", 3)]
+    if len(parts) != 4:
+        continue
+    uuid, pid, proc_name, used = parts
+    apps_by_uuid.setdefault(uuid, []).append(f"{pid}:{used}MiB:{proc_name}")
+
+timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+rows = []
+for line in gpu_text.splitlines():
+    parts = [p.strip() for p in line.split(",", 4)]
+    if len(parts) != 5:
+        continue
+    idx, uuid, mem_used, mem_total, util = parts
+    if selected and idx not in selected:
+        continue
+    try:
+        util_value = float(util)
+    except ValueError:
+        util_value = 0.0
+    rows.append({
+        "timestamp": timestamp,
+        "phase": phase,
+        "detail": detail,
+        "gpu": idx,
+        "memory_used_mib": mem_used,
+        "memory_total_mib": mem_total,
+        "util_gpu_pct": util,
+        "is_idle": "1" if util_value < idle_threshold else "0",
+        "compute_apps": "|".join(apps_by_uuid.get(uuid, [])),
+    })
+
+with out.open("a", newline="") as f:
+    writer = csv.DictWriter(f, fieldnames=[
+        "timestamp",
+        "phase",
+        "detail",
+        "gpu",
+        "memory_used_mib",
+        "memory_total_mib",
+        "util_gpu_pct",
+        "is_idle",
+        "compute_apps",
+    ])
+    writer.writerows(rows)
+PY_SAMPLE
+  sleep "$INTERVAL"
 done
 EOF
 chmod +x "${RUN_DIR}/monitor_host.sh"
 rm -f "${RUN_DIR}/monitor.stop"
-"${RUN_DIR}/monitor_host.sh" "${RUN_DIR}/monitor.log" "${RUN_DIR}/monitor.stop" &
+"${RUN_DIR}/monitor_host.sh" \
+    "${RUN_DIR}/gpu_samples.csv" \
+    "${RUN_DIR}/monitor.stop" \
+    "${PHASE_FILE}" \
+    "${SELECTED_GPUS}" \
+    "${GPU_MONITOR_INTERVAL_SECONDS}" \
+    "${PYTHON_BIN}" \
+    "${GPU_IDLE_UTIL_THRESHOLD}" &
 PIDS+=("$!")
 
+phase_mark "polar_services_start" "rollout_gateway"
 "${PYTHON_BIN}" -m polar.cli serve_rollout -c "${TOPOLOGY_PATH}" > "${RUN_DIR}/logs/polar_rollout.log" 2>&1 &
 PIDS+=("$!")
 sleep 2
@@ -513,13 +623,17 @@ for url in ("http://127.0.0.1:48080/health", "http://127.0.0.1:48100/health"):
     else:
         raise SystemExit(f"service not healthy: {url}: {last}")
 PY
+phase_mark "polar_services_ready" "rollout_gateway_health_ok"
 
 if [ "${PRORL_GLOBAL_RAY_STOP}" = "1" ]; then
+    phase_mark "ray_cleanup" "global_ray_stop"
     "${RAY_BIN}" stop --force >/dev/null 2>&1 || true
 else
+    phase_mark "ray_cleanup" "private_ray_stop"
     stop_private_ray
 fi
 if [ "${PRORL_KILL_STALE_RAY_PROCESSES}" = "1" ]; then
+    phase_mark "ray_cleanup" "kill_stale_processes"
     pkill -u "$(id -un)" -f "ray::WorkerDict" >/dev/null 2>&1 || true
     pkill -u "$(id -un)" -f "ray::SGLangEngine" >/dev/null 2>&1 || true
     pkill -u "$(id -un)" -f "ray::RolloutManager" >/dev/null 2>&1 || true
@@ -527,6 +641,7 @@ if [ "${PRORL_KILL_STALE_RAY_PROCESSES}" = "1" ]; then
     sleep 3
 fi
 strict_gpu_preflight "before_ray_start"
+phase_mark "ray_start" "start_head"
 if [ -z "${RAY_PORT}" ]; then
     RAY_PORT="$("${PYTHON_BIN}" - <<'PY'
 import socket
@@ -571,6 +686,7 @@ if actual != expected:
 print(f"Ray GPU preflight OK: {actual} GPU(s) at ${RAY_ADDRESS_URI}")
 PY
 strict_gpu_preflight "before_train_async"
+phase_mark "train_async" "slime_megatron_sglang"
 
 NUM_ROLLOUT="${NUM_ROLLOUT:-4}"
 ROLLOUT_BATCH_SIZE="${ROLLOUT_BATCH_SIZE:-1}"
@@ -583,6 +699,7 @@ MAX_TOKENS_PER_GPU="${MAX_TOKENS_PER_GPU:-${SGLANG_CONTEXT_LENGTH}}"
 USE_DYNAMIC_BATCH_SIZE="${USE_DYNAMIC_BATCH_SIZE:-0}"
 SGLANG_MEM_FRACTION_STATIC="${SGLANG_MEM_FRACTION_STATIC:-0.70}"
 SGLANG_CUDA_GRAPH_MAX_BS="${SGLANG_CUDA_GRAPH_MAX_BS:-16}"
+SGLANG_SKIP_SERVER_WARMUP="${SGLANG_SKIP_SERVER_WARMUP:-1}"
 SAVE_INTERVAL="${SAVE_INTERVAL:-1000000}"
 START_ROLLOUT_ARGS=()
 if [ -n "${START_ROLLOUT_ID:-}" ]; then
@@ -729,6 +846,7 @@ CUDA_VISIBLE_DEVICES="${SELECTED_GPUS}" RAY_ADDRESS="${RAY_ADDRESS_URI}" "${PYTH
     --sglang-disable-cuda-graph \
     --sglang-disable-piecewise-cuda-graph \
     --sglang-disable-overlap-schedule \
+    $(if [ "${SGLANG_SKIP_SERVER_WARMUP}" = "1" ]; then printf '%s\n' "--sglang-skip-server-warmup"; fi) \
     --sglang-cuda-graph-max-bs "${SGLANG_CUDA_GRAPH_MAX_BS}" \
     --sglang-rl-on-policy-target fsdp \
     --sglang-tool-call-parser qwen3_coder \
@@ -738,6 +856,62 @@ CUDA_VISIBLE_DEVICES="${SELECTED_GPUS}" RAY_ADDRESS="${RAY_ADDRESS_URI}" "${PYTH
 status="${PIPESTATUS[0]}"
 set -e
 
+phase_mark "summarize" "gpu_idle_summary"
+touch "${RUN_DIR}/monitor.stop"
+sleep 2
+"${PYTHON_BIN}" - "${RUN_DIR}/gpu_samples.csv" "${RUN_DIR}/gpu_idle_summary.tsv" "${GPU_IDLE_UTIL_THRESHOLD}" "${GPU_MONITOR_INTERVAL_SECONDS}" <<'PY_SUMMARY'
+import csv
+import sys
+from collections import defaultdict
+from pathlib import Path
+
+samples_path = Path(sys.argv[1])
+summary_path = Path(sys.argv[2])
+idle_threshold = float(sys.argv[3])
+interval = float(sys.argv[4])
+
+rows = []
+if samples_path.exists():
+    with samples_path.open(newline="") as f:
+        rows = list(csv.DictReader(f))
+
+by_gpu = defaultdict(list)
+for row in rows:
+    by_gpu[row["gpu"]].append(row)
+
+with summary_path.open("w") as out:
+    out.write(
+        "gpu\tphase\tsamples\tseconds_est\tidle_samples\tidle_seconds_est\t"
+        "idle_fraction\tactive_process_samples\tidle_without_process_samples\t"
+        "idle_with_process_samples\tidle_util_threshold_pct\n"
+    )
+    for gpu in sorted(by_gpu, key=lambda x: int(x)):
+        by_phase = defaultdict(list)
+        for row in by_gpu[gpu]:
+            by_phase[row["phase"]].append(row)
+        for phase in sorted(by_phase):
+            phase_rows = by_phase[phase]
+            samples = len(phase_rows)
+            idle_rows = [
+                r for r in phase_rows
+                if float(r["util_gpu_pct"] or 0.0) < idle_threshold
+            ]
+            active_proc = sum(1 for r in phase_rows if r["compute_apps"])
+            idle_no_proc = sum(1 for r in idle_rows if not r["compute_apps"])
+            idle_with_proc = sum(1 for r in idle_rows if r["compute_apps"])
+            seconds = samples * interval
+            idle_seconds = len(idle_rows) * interval
+            out.write(
+                f"{gpu}\t{phase}\t{samples}\t{seconds:.1f}\t"
+                f"{len(idle_rows)}\t{idle_seconds:.1f}\t"
+                f"{(len(idle_rows) / samples if samples else 0):.4f}\t"
+                f"{active_proc}\t{idle_no_proc}\t{idle_with_proc}\t"
+                f"{idle_threshold:g}\n"
+            )
+PY_SUMMARY
+
 echo "Run finished with status ${status}"
 echo "Run dir: ${RUN_DIR}"
+echo "GPU samples: ${RUN_DIR}/gpu_samples.csv"
+echo "GPU idle summary: ${RUN_DIR}/gpu_idle_summary.tsv"
 exit "${status}"

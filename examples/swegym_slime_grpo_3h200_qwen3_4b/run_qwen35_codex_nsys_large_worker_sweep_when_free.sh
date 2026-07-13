@@ -18,6 +18,9 @@ LOG="${LOG:-${PROFILE_DIR}/sweep.log}"
 NSYS_TRACE="${NSYS_TRACE:-cuda,nvtx}"
 NSYS_SAMPLE="${NSYS_SAMPLE:-none}"
 NSYS_EXTRA_ARGS="${NSYS_EXTRA_ARGS:-}"
+NSYS_EXPORT_FORMATS="${NSYS_EXPORT_FORMATS:-sqlite}"
+NSYS_GPU_METRICS_DEVICES="${NSYS_GPU_METRICS_DEVICES:-all}"
+NSYS_GPU_METRICS_FREQUENCY="${NSYS_GPU_METRICS_FREQUENCY:-100}"
 NSYS_BIN="${NSYS_BIN:-nsys}"
 RAY_NUM_CPUS_FOR_NSYS="${RAY_NUM_CPUS_FOR_NSYS:-64}"
 KEEP_RUNTIME_ARTIFACTS="${KEEP_RUNTIME_ARTIFACTS:-0}"
@@ -129,6 +132,20 @@ run_one_config() {
         "$(date -Is)" \
         "$(printf '%s ' "${launch_env[@]}")" >>"${LOG}"
 
+    local nsys_export_args=()
+    if [ "${NSYS_EXPORT_FORMATS}" != "none" ]; then
+        nsys_export_args=(--export="${NSYS_EXPORT_FORMATS}")
+    fi
+
+    local nsys_gpu_metrics_args=()
+    if [ "${NSYS_GPU_METRICS_DEVICES}" != "none" ]; then
+        nsys_gpu_metrics_args=(
+            --gpu-metrics-devices="${NSYS_GPU_METRICS_DEVICES}"
+            --gpu-metrics-frequency="${NSYS_GPU_METRICS_FREQUENCY}"
+            --gpuctxsw=true
+        )
+    fi
+
     set +e
     env "${launch_env[@]}" "${NSYS_BIN}" profile \
         --trace="${NSYS_TRACE}" \
@@ -136,6 +153,8 @@ run_one_config() {
         --trace-fork-before-exec=true \
         --wait=primary \
         --force-overwrite=true \
+        "${nsys_export_args[@]}" \
+        "${nsys_gpu_metrics_args[@]}" \
         -o "${nsys_out}" \
         ${NSYS_EXTRA_ARGS} \
         bash examples/swegym_slime_grpo_3h200_qwen3_4b/launch_qwen3_4b_3h200.sh >>"${LOG}" 2>&1
