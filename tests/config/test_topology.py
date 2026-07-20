@@ -60,6 +60,27 @@ def test_topology_rejects_unknown_keys(tmp_path: Path) -> None:
         TopologyConfig.load(path)
 
 
+def test_topology_accepts_gateway_session_base_dir(tmp_path: Path) -> None:
+    path = _write_yaml(
+        tmp_path / "topology.yaml",
+        {
+            "gateway": {
+                "nodes": [
+                    {
+                        "id": "node-a",
+                        "public_url": "http://127.0.0.1:8100",
+                        "session_base_dir": " /workspace/polar-sessions ",
+                    }
+                ],
+            },
+        },
+    )
+
+    topology = TopologyConfig.load(path)
+
+    assert topology.gateway.nodes[0].session_base_dir == "/workspace/polar-sessions"
+
+
 def test_select_gateway_requires_node_id_for_multi_node_topology(tmp_path: Path) -> None:
     path = _write_yaml(
         tmp_path / "topology.yaml",

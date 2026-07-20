@@ -60,7 +60,8 @@ class MiniSweAgentHarness(BaseHarness):
         return [
             ExecInput(
                 command=(
-                    " ".join(args)
+                    "set -o pipefail; "
+                    + " ".join(args)
                     + f" 2>&1 </dev/null | tee {RUNTIME_AGENT_LOG_DIR}/mini-swe-agent.txt"
                 ),
                 env=env,

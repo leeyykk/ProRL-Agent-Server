@@ -16,7 +16,12 @@ logger = logging.getLogger(__name__)
 
 
 class ApptainerRuntime(BaseRuntime):
-    """Apptainer instance used across rollout stages."""
+    """Apptainer runtime used across rollout stages.
+
+    Some shared clusters disable ``apptainer instance start`` for regular
+    users. Keep state in the host-backed ``/polar/session`` bind mount and use
+    direct ``apptainer exec`` calls instead of long-lived instances.
+    """
 
     def __init__(self, spec: RuntimeSpec, session_id: str, session_dir: Path) -> None:
         super().__init__(spec, session_id, session_dir)
@@ -42,33 +47,8 @@ class ApptainerRuntime(BaseRuntime):
     async def start(self) -> None:
         if self._destroyed:
             raise RuntimeError("apptainer runtime was already destroyed")
-        # Use a host-backed overlay directory instead of --writable-tmpfs
-        # (default tmpfs overlay is only 64 MB, too small for most workloads).
-        self._overlay_dir = self.session_dir / "overlay"
-        self._overlay_dir.mkdir(parents=True, exist_ok=True)
-        args = [self._binary, "instance", "start",
-                "--overlay", str(self._overlay_dir)]
-        if self.spec.gpus > 0:
-            args.append("--nv")
-        network_name: str | None
-        if not self.spec.allow_internet:
-            network_name = "none"
-        else:
-            network_name = self.spec.network
-        if network_name and network_name != "host":
-            args.extend(["--net", "--network", network_name])
-        args.extend(["--bind", f"{self.session_dir}:{self.runtime_session_dir}"])
-        # Match DockerRuntime's kwargs.volumes contract. Apptainer accepts the
-        # same src[:dst[:opts]] bind syntax for the read-only CLI mount used by
-        # SWE-Gym.
-        for volume in self.spec.kwargs.get("volumes", []):
-            args.extend(["--bind", str(volume)])
-        args.extend([self.spec.image, self._instance_name])
-        rc, _, _ = await self._run_local_command(*args)
-        if rc != 0:
-            raise RuntimeError(
-                f"{self._binary} instance start failed with exit code {rc}"
-            )
+        self.session_dir.mkdir(parents=True, exist_ok=True)
+        self.artifacts_dir.mkdir(parents=True, exist_ok=True)
 
     _STOP_TIMEOUT = 30.0
 
@@ -76,15 +56,6 @@ class ApptainerRuntime(BaseRuntime):
         if self._destroyed:
             return
         self._destroyed = True
-        rc, _, stderr = await self._run_local_command(
-            self._binary, "instance", "stop", self._instance_name,
-            timeout=self._STOP_TIMEOUT, capture=True,
-        )
-        if rc != 0:
-            logger.warning(
-                "%s instance stop failed for %s (rc=%s): %s",
-                self._binary, self._instance_name, rc, stderr,
-            )
 
     async def exec(
         self,
@@ -105,7 +76,7 @@ class ApptainerRuntime(BaseRuntime):
                 shell_exports.append(f"export {key}={shlex.quote(str(effective_env[key]))};")
         if shell_exports:
             wrapped_command = " ".join(shell_exports + [wrapped_command])
-        args = [self._binary, "exec", f"instance://{self._instance_name}"]
+        args = self._exec_args()
         if effective_env:
             args.append("env")
             args.extend(f"{key}={value}" for key, value in effective_env.items())
@@ -128,7 +99,7 @@ class ApptainerRuntime(BaseRuntime):
             "bash",
             "-c",
             f"tar -cf - -C {shlex.quote(source_dir)} {shlex.quote(filename)} | "
-            f"{self._binary} exec instance://{self._instance_name} "
+            f"{shlex.join(self._exec_args())} "
             f"tar -xf - -C {shlex.quote(parent)}",
             capture=False,
         )
@@ -147,7 +118,7 @@ class ApptainerRuntime(BaseRuntime):
             "bash",
             "-c",
             f"tar -cf - -C {shlex.quote(local_path)} . | "
-            f"{self._binary} exec instance://{self._instance_name} "
+            f"{shlex.join(self._exec_args())} "
             f"tar -xf - -C {shlex.quote(remote_path)}",
             capture=False,
         )
@@ -164,7 +135,7 @@ class ApptainerRuntime(BaseRuntime):
         rc, _, _ = await self._run_local_command(
             "bash",
             "-c",
-            f"{self._binary} exec instance://{self._instance_name} "
+            f"{shlex.join(self._exec_args())} "
             f"tar -cf - -C {shlex.quote(parent)} {shlex.quote(filename)} | "
             f"tar -xf - -C {shlex.quote(local_dir)}",
             capture=False,
@@ -181,7 +152,7 @@ class ApptainerRuntime(BaseRuntime):
         rc, _, _ = await self._run_local_command(
             "bash",
             "-c",
-            f"{self._binary} exec instance://{self._instance_name} "
+            f"{shlex.join(self._exec_args())} "
             f"tar -cf - -C {shlex.quote(remote_path)} . | "
             f"tar -xf - -C {shlex.quote(local_path)}",
             capture=False,
@@ -190,6 +161,22 @@ class ApptainerRuntime(BaseRuntime):
             raise RuntimeError(
                 f"apptainer download_dir failed with exit code {rc}"
             )
+
+    def _exec_args(self) -> list[str]:
+        args = [self._binary, "exec"]
+        extra_args = os.environ.get("POLAR_APPTAINER_EXEC_ARGS", "")
+        if extra_args:
+            args.extend(shlex.split(extra_args))
+        if self.spec.gpus > 0:
+            args.append("--nv")
+        network_name = "none" if not self.spec.allow_internet else self.spec.network
+        if network_name and network_name != "host":
+            args.extend(["--net", "--network", network_name])
+        args.extend(["--bind", f"{self.session_dir}:{self.runtime_session_dir}"])
+        for volume in self.spec.kwargs.get("volumes", []):
+            args.extend(["--bind", str(volume)])
+        args.append(self.spec.image)
+        return args
 
     @staticmethod
     def _resolve_binary() -> str:

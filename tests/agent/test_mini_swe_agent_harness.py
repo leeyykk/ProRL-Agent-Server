@@ -19,6 +19,7 @@ def test_mini_swe_agent_harness_prefixes_local_model_for_litellm():
 
     assert len(steps) == 1
     command = steps[0].command
+    assert command.startswith("set -o pipefail; mini --yolo")
     assert "mini --yolo" in command
     assert "--model openai//models/Qwen3.5-4B" in command
     assert "--config /cfg/default.yaml" in command
@@ -48,4 +49,4 @@ def test_mini_swe_agent_harness_accepts_cli_with_arguments():
 
     command = harness.run_steps("fix the bug")[0].command
 
-    assert command.startswith("uv run mini --yolo")
+    assert command.startswith("set -o pipefail; uv run mini --yolo")

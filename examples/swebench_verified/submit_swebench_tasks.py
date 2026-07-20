@@ -37,6 +37,11 @@ HARNESS_NPM_PACKAGE: dict[str, str] = {
     "qwen_code": "@qwen-code/qwen-code@0.14.5",
 }
 
+MINI_SWE_AGENT_VERSION = "2.4.2"
+MINI_SWE_CONFIG_TARGET = "/polar/session/mini_swe_agent_swebench.yaml"
+MINI_SWE_PYTHONPATH = "/polar/session/miniswe-py"
+MINI_SWE_CLI = "/polar/session/home/.venv/bin/python -m minisweagent.run.mini"
+
 _PREPARE_BASE = (
     "rm -rf /polar/session/workspace && "
     "mkdir -p /polar/session/logs/agent /polar/session/workspace \"$HOME/.venv/bin\" && "
@@ -47,8 +52,16 @@ _PREPARE_BASE = (
     "cd /polar/session/workspace && git reset --hard; true"
 )
 
+_MINI_SWE_PREPARE_BASE = _PREPARE_BASE.replace("cp -a ", "cp -r ")
+
 
 def prepare_command_for_harness(harness: str) -> str:
+    if harness == "mini_swe_agent":
+        return (
+            f"{_MINI_SWE_PREPARE_BASE} && "
+            f"$HOME/.venv/bin/python -m pip install -q --target {MINI_SWE_PYTHONPATH} "
+            f"mini-swe-agent=={MINI_SWE_AGENT_VERSION}"
+        )
     pkg = HARNESS_NPM_PACKAGE[harness]
     return f"npm install -g {pkg} && {_PREPARE_BASE}"
 
@@ -57,17 +70,25 @@ def runtime_env_for_harness(harness: str) -> dict[str, str]:
     env: dict[str, str] = {}
     if harness == "opencode":
         env["OPENCODE_FAKE_VCS"] = "git"
+    if harness == "mini_swe_agent":
+        env["PYTHONPATH"] = MINI_SWE_PYTHONPATH
+        env["PAGER"] = "cat"
+        env["MANPAGER"] = "cat"
+        env["PIP_PROGRESS_BAR"] = "off"
+        env["TQDM_DISABLE"] = "1"
+        env["MSWEA_CONFIGURED"] = "1"
     return env
 
 
 def evaluator_exclude_patterns_for_harness(harness: str) -> list[str]:
     patterns: list[str] = []
+    if harness == "mini_swe_agent":
+        patterns.extend(["mini-swe-agent.json", "**/mini-swe-agent.json"])
     if harness == "claude_code":
         patterns.extend([".claude/**", "**/.claude/**"])
     if harness == "qwen_code":
         patterns.extend([".qwen/**", "**/.qwen/**"])
     return patterns
-
 
 
 def parse_args() -> argparse.Namespace:
@@ -162,6 +183,26 @@ def build_task_request(
 ) -> dict[str, Any]:
     instance_id = str(instance["instance_id"])
     image = runtime_image_for_instance(instance_id)
+    prepare = []
+    if args.harness == "mini_swe_agent":
+        prepare.append(
+            {
+                "type": "upload_file",
+                "source": str(EXAMPLE_DIR / "mini_swe_agent_swebench.yaml"),
+                "target": MINI_SWE_CONFIG_TARGET,
+            }
+        )
+    prepare.append({"type": "exec", "command": prepare_command_for_harness(args.harness)})
+    agent_settings: dict[str, Any] = {}
+    if args.harness == "mini_swe_agent":
+        agent_settings = {
+            "cli": MINI_SWE_CLI,
+            "config": ["default.yaml", MINI_SWE_CONFIG_TARGET],
+            "agent_class": "default",
+            "environment_class": "local",
+            "model_class": "litellm_textbased",
+            "cost_limit": 0,
+        }
     return {
         "task_id": f"swebench-{args.harness}-{sanitize_instance_id(instance_id)}-{batch_id}",
         "instruction": str(instance["problem_statement"]).strip(),
@@ -170,7 +211,7 @@ def build_task_request(
         "runtime": {
             "backend": args.runtime_backend,
             "image": runtime_image_for_backend(image, args.runtime_backend),
-            "prepare": [{"type": "exec", "command": prepare_command_for_harness(args.harness)}],
+            "prepare": prepare,
             "env": runtime_env_for_harness(args.harness),
             "network": "host",
             "workdir": "/polar/session/workspace",
@@ -178,14 +219,18 @@ def build_task_request(
         "agent": {
             "harness": args.harness,
             "model_name": args.model_name,
-            "settings": {},
+            "settings": agent_settings,
             "env": {},
         },
         "builder": {"strategy": "prefix_merging"},
         "evaluator": {
             "strategy": "swebench_harness",
             "config": {
-                "repo_dir": "/testbed",
+                "repo_dir": (
+                    "/polar/session/workspace"
+                    if args.runtime_backend == "apptainer"
+                    else "/testbed"
+                ),
                 "patch_command": (
                     "cd /polar/session/workspace && "
                     "git add -A && git diff --cached --binary"
@@ -193,7 +238,7 @@ def build_task_request(
                 "instance": instance,
                 "exclude_patterns": evaluator_exclude_patterns_for_harness(args.harness),
             },
-            "refresh_runtime": True,
+            "refresh_runtime": args.runtime_backend != "apptainer",
         },
     }
 
