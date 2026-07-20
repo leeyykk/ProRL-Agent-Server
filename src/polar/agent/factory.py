@@ -12,6 +12,7 @@ def _builtin_harness_map() -> dict[str, type[BaseHarness]]:
     from polar.agent.harnesses.claude_code import ClaudeCodeHarness
     from polar.agent.harnesses.codex import CodexHarness
     from polar.agent.harnesses.gemini_cli import GeminiCliHarness
+    from polar.agent.harnesses.mini_swe_agent import MiniSweAgentHarness
     from polar.agent.harnesses.openhands_sdk import OpenHandsSdkHarness
     from polar.agent.harnesses.opencode import OpenCodeHarness
     from polar.agent.harnesses.pi import PiHarness
@@ -22,6 +23,7 @@ def _builtin_harness_map() -> dict[str, type[BaseHarness]]:
         "claude_code": ClaudeCodeHarness,
         "codex": CodexHarness,
         "gemini_cli": GeminiCliHarness,
+        "mini_swe_agent": MiniSweAgentHarness,
         "openhands_sdk": OpenHandsSdkHarness,
         "opencode": OpenCodeHarness,
         "pi": PiHarness,
