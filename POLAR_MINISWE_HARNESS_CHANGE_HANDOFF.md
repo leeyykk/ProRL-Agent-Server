@@ -678,3 +678,25 @@ Useful live checks:
     tail -f /NHNHOME/home/profiled_runs/prorl_miniswe_full_matrix_async2_mb2_20260720T093119Z/sweep.log
     nvidia-smi --query-gpu=index,memory.used,utilization.gpu --format=csv,noheader,nounits
     ps -eo pid,ppid,pgid,stat,etimes,args | grep -E "prorl_miniswe_full_matrix|train_async.py|SGLangEngine|MegatronTrainRayActor"
+
+
+## Token-capped MB2 restart - 2026-07-20
+
+The original full-matrix sweep `prorl_miniswe_full_matrix_async2_mb2_20260720T093119Z` was stopped at the user's request after about 3.5 hours. It had not completed its first `init4/run2/eval4` row. The stop targeted only process group 57690; a graceful TERM released the services and GPUs, then the few remaining launcher/Mini-SWE children in the same group were killed. All three GPUs were verified at 0 MiB before restart.
+
+The run was already using `MICRO_BATCH_SIZE=2`. The memory pressure came from Mini-SWE traces approaching the 32768-token context, allowing a fixed two-sample microbatch to approach 65536 packed tokens. Slime exposes `--use-dynamic-batch-size` with `--max-tokens-per-gpu`, but dynamic batching explicitly ignores `--micro-batch-size`. To preserve the requested fixed MB2 setting, the replacement uses the POLAR bridge's existing per-trace limit: `MAX_TOKENS_PER_GPU=8192` with `USE_DYNAMIC_BATCH_SIZE=0`. Traces above 8192 total prompt-plus-response tokens are excluded from training rather than truncated. Therefore a fixed two-sample microbatch is bounded at 16384 tokens, four times below the prior 65536-token worst case. Rollout generation and evaluation are unchanged.
+
+The copied matrix driver was changed from a hard-coded `MAX_TOKENS_PER_GPU=32768` launch assignment to `MAX_TOKENS_PER_GPU="${MAX_TOKENS_PER_GPU:-32768}"`, allowing the wrapper's cap to reach `train_async`. Both shell scripts passed `bash -n`, and the generated run settings plus live process arguments confirm `MICRO_BATCH_SIZE=2`, `MAX_TOKENS_PER_GPU=8192`, `USE_DYNAMIC_BATCH_SIZE=0`, and `QKV_FORMAT=thd`.
+
+Replacement sweep details:
+
+- Sweep stem: `prorl_miniswe_full_matrix_async2_mb2_tokcap16k_20260720T131500Z`
+- Managed execution session: `60427`
+- Wrapper PID / process group: `376245`
+- First row: `init4/run2/eval4`
+- Matrix: `4:2 4:4 8:4 8:8 8:16 16:4 16:8 16:16 32:16 32:32`
+- Sweep log: `/NHNHOME/home/profiled_runs/prorl_miniswe_full_matrix_async2_mb2_tokcap16k_20260720T131500Z/sweep.log`
+- Run directory pattern: `/NHNHOME/home/prorl_agent_server_runs/swegym_slime_grpo_3h200/prorl_miniswe_full_matrix_async2_mb2_tokcap16k_20260720T131500Z_init<INIT>_run<RUN>`
+- Launch wrapper: `tmp/prorl_miniswe_full_matrix_20260720T085614Z/launch_full_matrix_mb2_tokcap16k.sh`
+
+Nsight remains disabled: `NSYS_CAPTURE_RANGE=none`, `NSYS_EXPORT_FORMATS=none`, `NSYS_GPU_METRICS_DEVICES=none`, and `NSYS_BIN=/bin/false`. The first row passed GPU/Ray placement checks, loaded SGLang and both Megatron actors, started the async POLAR worker, and produced repeated Mini-SWE chat-completion HTTP 200 responses.
