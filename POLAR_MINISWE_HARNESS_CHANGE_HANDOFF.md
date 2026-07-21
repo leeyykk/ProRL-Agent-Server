@@ -867,3 +867,20 @@ POLAR Mini-SWE `init4/run4/eval4` launched automatically at
 2026-07-21T22:50:35+09:00 and was loading both SGLang engines when this update
 was written. The report contains pending rows and artifact paths for this row
 and both subsequent POLAR Codex configurations.
+
+## Canonical small-parity operations runbook - 2026-07-22
+
+The standalone zero-context operational handoff is now:
+
+`examples/swegym_slime_grpo_3h200_qwen3_4b/RUNBOOK_POLAR_MINISWE_SMALL_PARITY_HANDOFF.md`
+
+It records the exact matrix, topology, launch command, required ignored runtime
+assets, evaluator correction, server-specific failed launch paths, monitoring,
+safe stop procedure, and result-update checklist.
+
+POLAR Mini-SWE `init4/run4/eval4` subsequently completed with exit 0 in 38.2
+minutes: 39 terminal `COMPLETED` sessions, 14 resolved (35.9%), 8 unique
+solved task groups, and `evaluated_repo_dir=/polar/session/workspace`.
+
+The active POLAR Codex `init4/run2/eval4` row exposed a liveness problem:
+roughly 12k-token Codex traces exceed the 8,192 training-token cap, every group
