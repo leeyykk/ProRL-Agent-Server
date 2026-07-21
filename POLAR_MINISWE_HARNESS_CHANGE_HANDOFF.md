@@ -772,3 +772,76 @@ POLAR Codex CLI `init8/run4/eval8` row. Headline results are 218.9, 228.7, and
 reward. The report records topology, microbatch, worker-mapping, and harness
 caveats and must be used instead of presenting the three wall times as a pure
 framework comparison.
+
+
+## Evaluator diagnosis, completed run8, and reduced parity rerun - 2026-07-21
+
+The reduced 8/16-worker sweep was stopped at the user request. Process group
+`1185990` was terminated and the remaining privileged cleanup process was
+removed with `ctn_gcsudo`; all three GPUs were confirmed at 0 MiB before the
+new launch. The sweep had advanced into `init16/run4`, but that row was not
+complete.
+
+The earlier `init8/run8/eval8` row did complete with exit status 0:
+
+- Run directory: `/NHNHOME/home/prorl_agent_server_runs/swegym_slime_grpo_3h200/prorl_miniswe_mb2_tokcap16k_workers8_16_20260721T011600Z_init8_run8`
+- Started: 2026-07-21T14:00:46+09:00
+- Finished: 2026-07-21T16:55:56+09:00
+- Wall time: 175.2 minutes
+- Accepted traced sessions: 323, or 1.844 sessions/minute
+- LLM calls: 12,547 total, or 38.84 per accepted session
+- Completion tokens: 2,210,958 total, 6,845.1 per session, or 12,622/minute
+- Terminal attempts: 324: 317 `COMPLETED`, 6 `ERROR`, and 1 `TIMEOUT`
+- Steady train time: 1,249.4 seconds/step; actor throughput 1,844.3 tokens/s
+- GPU idle: GPU0 14.6%, GPU1 14.4%, GPU2 5.2%
+
+These statistics were added to
+`examples/swegym_slime_grpo_3h200_qwen3_4b/POLAR_MINISWE_INIT8_RUN4_SKYRL8_CODEX_COMPARISON.md`.
+The historical 0 reward/0 resolved values are retained only as artifact facts
+and are explicitly marked invalid for accuracy comparison.
+
+A conclusive evaluator path bug explains the historical POLAR Mini-SWE zero
+resolved rate. Mini-SWE edited `/polar/session/workspace`, but the generated
+SWE-bench evaluation script hard-coded `cd /testbed`. With
+`refresh_runtime: false`, `/testbed` remained the untouched image checkout, so
+the evaluator never tested the model patch. A nonempty collected patch and the
+old `patch_successfully_applied` field did not establish that the patch was in
+the directory actually tested.
+
+The fix is in `src/polar/trajectory/evaluator/swebench_harness.py`: before
+execution, it rewrites the conventional `/testbed` path in `eval_script` to the
+configured evaluator `repo_dir`. The grading report now also records
+`evaluated_repo_dir`. A matching fix is present in the runtime source snapshot
+under `tmp/prorl_miniswe_full_matrix_20260720T085614Z/runtime_src/`. Regression
+tests are in `tests/trajectory/test_swebench_harness.py`. POLAR Mini-SWE now
+uses `examples/swebench_verified/miniswe_reminder_agent.py`, which matches the
+SkyRL reminder-agent behavior. Focused validation is `5 passed`; both evaluator
+modules and the reminder module compile.
+
+The new smaller unattended suite is active:
+
+- Tmux session: `miniswe_small_parity_20260721`
+- Process group: `2216100`
+- Stem: `miniswe_small_parity_1train2rollout_20260721T083500Z`
+- Suite log: `/NHNHOME/home/profiled_runs/miniswe_small_parity_1train2rollout_20260721T083500Z/suite.log`
+- Manifest: `/NHNHOME/home/profiled_runs/miniswe_small_parity_1train2rollout_20260721T083500Z/manifest.tsv`
+- Master launcher: `tmp/prorl_miniswe_small_parity_20260721/run_small_parity_suite.sh`
+
+The launcher runs these three requested suites sequentially, continuing to the
+next stage even if one stage fails:
+
+1. SkyRL Mini-SWE with 4 parallel generation workers.
+2. Corrected POLAR Mini-SWE with `init4/run2/eval4` and `init4/run4/eval4`.
+3. POLAR Codex CLI with the same two POLAR worker configurations.
+
+All rows use a smaller matched workload: rollout batch size 4, 2 samples per
+prompt, 4 rollouts, 2 rollout steps, and microbatch size 1. All use the corrected
+1-training-GPU plus 2-rollout-GPU topology (TP1), unlike the legacy POLAR rows
+that used 2 training GPUs plus 1 rollout GPU. POLAR uses an 8192-token training
+cap and a 2048-token per-call Mini-SWE completion cap. Nsight is disabled.
+
+At the time of this update, the first SkyRL stage was actively generating. Both
+vLLM engines had loaded Qwen3.5-4B on GPUs 0 and 1 at about 154.4 GiB each, the
+FSDP training process held about 32.8 GiB on GPU 2, and repeated chat-completion
+requests returned HTTP 200. Monitor the suite log and manifest above. The POLAR
+stages start automatically after SkyRL exits.
