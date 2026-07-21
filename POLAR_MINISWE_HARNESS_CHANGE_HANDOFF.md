@@ -730,3 +730,32 @@ fixed `MICRO_BATCH_SIZE=2`, `MAX_TOKENS_PER_GPU=8192`,
 `USE_DYNAMIC_BATCH_SIZE=0`, all prior Mini-SWE settings, and no Nsight capture.
 Check it with `tmux has-session -t prorl_miniswe_mb2_ctn_20260721` and the log
 above.
+
+## Reduced 8/16-worker sweep - 2026-07-21
+
+At the user request, the active partial `init4/run4/eval4` continuation was
+stopped and its artifacts were preserved. The exact tmux session was
+interrupted, then killed after a 30-second graceful-cleanup window. All related
+processes were gone and GPUs 0, 1, and 2 were verified at 0 MiB before the next
+launch. The earlier successful `init4/run2/eval4` result remains valid.
+
+The replacement runs only existing matrix configurations whose init-worker
+count is 8 or 16:
+
+    8:4 8:8 8:16 16:4 16:8 16:16
+
+Active reduced-sweep details:
+
+- Tmux session: `prorl_miniswe_mb2_8_16_20260721`
+- `ctn_gcsudo`/wrapper pane PID: `1185990`
+- Stem: `prorl_miniswe_mb2_tokcap16k_workers8_16_20260721T011600Z`
+- Log: `/NHNHOME/home/profiled_runs/prorl_miniswe_mb2_tokcap16k_workers8_16_20260721T011600Z/sweep.log`
+- First row: `init8/run4/eval8`
+- Launch time: 2026-07-21T10:21:52+09:00
+
+The first row passed Apptainer, GPU isolation, host RAM, and Ray startup
+preflights. Generated settings confirm `POLAR_MAX_INIT_WORKERS=8`,
+`POLAR_MAX_RUN_WORKERS=4`, `POLAR_MAX_POSTRUN_WORKERS=8`, fixed
+`MICRO_BATCH_SIZE=2`, `MAX_TOKENS_PER_GPU=8192`, and
+`USE_DYNAMIC_BATCH_SIZE=0`. The 4-worker-only and 32-worker rows are excluded.
+Nsight remains disabled.
