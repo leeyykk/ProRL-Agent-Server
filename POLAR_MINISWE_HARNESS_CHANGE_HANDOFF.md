@@ -759,3 +759,16 @@ preflights. Generated settings confirm `POLAR_MAX_INIT_WORKERS=8`,
 `MICRO_BATCH_SIZE=2`, `MAX_TOKENS_PER_GPU=8192`, and
 `USE_DYNAMIC_BATCH_SIZE=0`. The 4-worker-only and 32-worker rows are excluded.
 Nsight remains disabled.
+
+## Completed init8/run4 comparison report
+
+The requested measured comparison is now in
+`examples/swegym_slime_grpo_3h200_qwen3_4b/POLAR_MINISWE_INIT8_RUN4_SKYRL8_CODEX_COMPARISON.md`.
+It compares the completed POLAR Mini-SWE `init8/run4/eval8` row against the
+SkyRL Mini-SWE parallel-generation-workers-8 baseline and the topology-matched
+POLAR Codex CLI `init8/run4/eval8` row. Headline results are 218.9, 228.7, and
+52.9 wall minutes respectively. SkyRL was the only quality-positive result at
+40/200 resolved; both POLAR Mini-SWE and the matched Codex row reported zero
+reward. The report records topology, microbatch, worker-mapping, and harness
+caveats and must be used instead of presenting the three wall times as a pure
+framework comparison.
