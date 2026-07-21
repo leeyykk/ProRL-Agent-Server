@@ -845,3 +845,25 @@ vLLM engines had loaded Qwen3.5-4B on GPUs 0 and 1 at about 154.4 GiB each, the
 FSDP training process held about 32.8 GiB on GPU 2, and repeated chat-completion
 requests returned HTTP 200. Monitor the suite log and manifest above. The POLAR
 stages start automatically after SkyRL exits.
+
+
+## Small parity suite progress - 2026-07-21 22:52+09:00
+
+SkyRL workers4 completed with exit status 0 in 32.7 minutes: 40 trajectories,
+12 resolved, and mean reward 0.300.
+
+Corrected POLAR Mini-SWE `init4/run2/eval4` completed with exit status 0 at
+2026-07-21T22:50:35+09:00, 47.1 minutes after launch. Its final result
+directory contains 29 terminal trajectories, all `COMPLETED`; 14 resolved
+(48.3%) across 8 unique solved task groups. All resolved artifacts record
+`evaluated_repo_dir: /polar/session/workspace`, validating the evaluator fix.
+There are 32 nonzero traces with 1,217 LLM calls and 211,349 completion tokens.
+
+The living comparison report is:
+
+`examples/swegym_slime_grpo_3h200_qwen3_4b/POLAR_MINISWE_SMALL_PARITY_SKYRL4_CODEX_COMPARISON.md`
+
+POLAR Mini-SWE `init4/run4/eval4` launched automatically at
+2026-07-21T22:50:35+09:00 and was loading both SGLang engines when this update
+was written. The report contains pending rows and artifact paths for this row
+and both subsequent POLAR Codex configurations.
