@@ -22,11 +22,12 @@ and resolved rate 0 in every rollout batch, but a later audit found that its
 evaluator ran the generated SWE-bench script in `/testbed` while the agent had
 edited `/polar/session/workspace`. Consequently, the evaluator tested an
 untouched checkout and could not observe POLAR's patch.
-The matched Codex CLI row was much faster at 52.9 minutes, but all 324 saved
-trajectory rewards were 0. Its trajectories were also far shorter: 6.09 calls
-and 409.5 completion tokens per trajectory, compared with 36.06 calls and
-6718.7 tokens for POLAR Mini-SWE. Codex timing is therefore a systems/load
-reference, not evidence of useful agent throughput.
+The Codex CLI rows were much faster at 52.9 minutes for run4 and 52.5 minutes
+for run8, but all 324 and 320 respective saved trajectory rewards were 0. The
+run8 trajectories were also far shorter: 5.91 calls and 373.7 completion tokens
+per trajectory, compared with 38.84 calls and 6845.1 tokens for POLAR Mini-SWE
+run8. Codex timing is therefore a systems/load reference, not evidence of
+useful agent throughput.
 
 ## Main comparison
 
@@ -36,6 +37,7 @@ reference, not evidence of useful agent throughput.
 | POLAR + Mini-SWE | init 8, run 8, eval 8 | 175.2 | 323 | 1.844 | 38.84 | 6845.1 | 12622 | 0.000* | 0* |
 | SkyRL + Mini-SWE | parallel generation workers 8 | 228.7 | 200 | 0.875 | 37.70 | 9811.4 | 8580 | 0.200 | 40/200 |
 | POLAR + Codex CLI | init 8, run 4, eval 8 | 52.9 | 324 | 6.125 | 6.09 | 409.5 | 2508 | 0.000 | 0/324 reward-positive |
+| POLAR + Codex CLI | init 8, run 8, eval 8 | 52.5 | 320 | 6.095 | 5.91 | 373.7 | 2278 | 0.000 | 0/320 reward-positive |
 
 Derived values use:
 
@@ -63,19 +65,22 @@ session. The result directory has 372 terminal attempts: 243 `COMPLETED`, 124
 | POLAR Mini-SWE vs matched Codex wall time | POLAR was 4.14x slower |
 | POLAR Mini-SWE vs matched Codex calls/session | POLAR used 5.92x more calls |
 | POLAR Mini-SWE vs matched Codex completion tok/session | POLAR generated 16.4x more tokens |
+| POLAR Mini-SWE run8 vs matched Codex run8 wall time | POLAR was 3.34x slower |
+| POLAR Mini-SWE run8 vs matched Codex run8 calls/session | POLAR used 6.57x more calls |
+| POLAR Mini-SWE run8 vs matched Codex run8 completion tok/session | POLAR generated 18.3x more tokens |
 
 ## Configuration parity
 
-The Codex CLI row is the topology-matched comparator for the completed POLAR
-row. SkyRL parallel workers 8 is the separately requested baseline and is not
-an exact topology match.
+The Codex CLI rows are topology-matched comparators for the corresponding
+completed POLAR rows. SkyRL parallel workers 8 is the separately requested
+baseline and is not an exact topology match.
 
 | Axis | POLAR Mini-SWE | SkyRL Mini-SWE workers 8 | POLAR Codex CLI |
 | --- | --- | --- | --- |
 | Model | Qwen3.5-4B | Qwen3.5-4B | Qwen3.5-4B |
 | Data lineage | SWE-Gym 3h200 | Same SWE-Gym/SWE-bench source lineage | SWE-Gym 3h200 |
 | Harness | Mini-SWE-Agent | Mini-SWE-Agent | Codex CLI 0.121.0 |
-| Worker controls | init 8, run 4, postrun/eval 8 | one generation-worker pool of 8 | init 8, run 4, postrun/eval 8 |
+| Worker controls | init 8, run 4 or 8, postrun/eval 8 | one generation-worker pool of 8 | init 8, run 4 or 8, postrun/eval 8 |
 | Async/staleness | async level 2 | max staleness 2 | async level 2 |
 | Train batch / samples | 8 / 4 per prompt | 8 / 4 per prompt | 8 / 4 per prompt |
 | Microbatch | 2 | 1 | 2 |
@@ -94,20 +99,20 @@ framework speed ratio.
 
 ## Training and GPU behavior
 
-| Metric | POLAR Mini-SWE init8/run4 | POLAR Mini-SWE init8/run8 | POLAR Codex init8/run4 |
-| --- | ---: | ---: | ---: |
-| Steady train time/step | 1226.9 s | 1249.4 s | 377.5 s |
-| Actor train time/step | 901.2 s | 921.0 s | 287.2 s |
-| Reference logprob time/step | 167.3 s | 166.8 s | 54.7 s |
-| Policy logprob time/step | 158.2 s | 161.3 s | 35.4 s |
-| Actor train tokens/s | 1784.5 | 1844.3 | 1403.0 |
-| GPU0 idle | 32.1% | 14.6% | 17.1% |
-| GPU1 idle | 32.2% | 14.4% | 17.4% |
-| GPU2 rollout idle | 2.1% | 5.2% | 62.0% |
+| Metric | POLAR Mini-SWE init8/run4 | POLAR Mini-SWE init8/run8 | POLAR Codex init8/run4 | POLAR Codex init8/run8 |
+| --- | ---: | ---: | ---: | ---: |
+| Steady train time/step | 1226.9 s | 1249.4 s | 377.5 s | 383.6 s |
+| Actor train time/step | 901.2 s | 921.0 s | 287.2 s | 293.1 s |
+| Reference logprob time/step | 167.3 s | 166.8 s | 54.7 s | 53.1 s |
+| Policy logprob time/step | 158.2 s | 161.3 s | 35.4 s | 37.1 s |
+| Actor train tokens/s | 1784.5 | 1844.3 | 1403.0 | 1413.2 |
+| GPU0 idle | 32.1% | 14.6% | 17.1% | 14.9% |
+| GPU1 idle | 32.2% | 14.4% | 17.4% | 14.0% |
+| GPU2 rollout idle | 2.1% | 5.2% | 62.0% | 78.8% |
 
 POLAR Mini-SWE kept its single rollout GPU nearly continuously active, whereas
-the short Codex workload left that GPU idle for 62% of the `train_async`
-window. Mini-SWE training took 3.25 times longer per steady step because the
+the short Codex workloads left that GPU idle for 62.0% and 78.8% of their
+respective `train_async` windows. Mini-SWE training took 3.25 times longer per steady step because the
 accepted sequences were much longer, even though measured actor token
 throughput was higher.
 
@@ -124,9 +129,10 @@ the POLAR table.
   the historical zero-reward figures do not characterize its accuracy. The
   evaluator script hard-coded `cd /testbed`, whereas the agent's patch was in
   `/polar/session/workspace`. The rerun fixes the evaluator to test the latter.
-- The exact matched Codex row has 324 `COMPLETED` result files and every one has
-  `reward: 0.0`. A separate Codex audit also found predominantly empty patches
-  in this local-Qwen Responses/tool-call setup. Its 52.9-minute wall time must
+- The matched Codex run4 and run8 rows have 324 and 320 accepted trajectories,
+  respectively, and every saved trajectory has `reward: 0.0`. A separate Codex
+  audit also found predominantly empty patches
+  in this local-Qwen Responses/tool-call setup. Their 52.9- and 52.5-minute wall times must
   not be interpreted as successful SWE throughput.
 - POLAR Mini-SWE completed without OOM under the 8192-token trace cap. Its
   historical accuracy is unknown because of the evaluator path mismatch, so a
@@ -157,12 +163,13 @@ SkyRL workers-8 source:
 Topology-matched Codex source:
 
 - `WORKER_MATRIX_METRICS_REPORT_ASYNC2.md`
-- Run directory: `/NHNHOME/home/prorl_agent_server_runs/swegym_slime_grpo_3h200/qwen35_lighttrace_mb2_steps2_worker_matrix_async2_ctn_20260717T051225Z_init8_run4`
+- Run4 directory: `/NHNHOME/home/prorl_agent_server_runs/swegym_slime_grpo_3h200/qwen35_lighttrace_mb2_steps2_worker_matrix_async2_ctn_20260717T051225Z_init8_run4`
+- Run8 directory: `/NHNHOME/home/prorl_agent_server_runs/swegym_slime_grpo_3h200/qwen35_lighttrace_mb2_steps2_worker_matrix_async2_ctn_20260717T051225Z_init8_run8`
 
 ## Scope
 
 This report compares two completed POLAR Mini-SWE rows with the explicitly
-requested SkyRL workers-8 baseline and one topology-matched Codex CLI row. It
+requested SkyRL workers-8 baseline and two topology-matched Codex CLI rows. It
 does not claim statistical significance from a single run and does not use the
 later POLAR worker configurations that were stopped before completion. The
 historical POLAR resolved rates are retained for artifact fidelity but are not
