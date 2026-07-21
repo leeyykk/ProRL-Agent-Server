@@ -700,3 +700,33 @@ Replacement sweep details:
 - Launch wrapper: `tmp/prorl_miniswe_full_matrix_20260720T085614Z/launch_full_matrix_mb2_tokcap16k.sh`
 
 Nsight remains disabled: `NSYS_CAPTURE_RANGE=none`, `NSYS_EXPORT_FORMATS=none`, `NSYS_GPU_METRICS_DEVICES=none`, and `NSYS_BIN=/bin/false`. The first row passed GPU/Ray placement checks, loaded SGLang and both Megatron actors, started the async POLAR worker, and produced repeated Mini-SWE chat-completion HTTP 200 responses.
+
+## Overnight result and persistent continuation - 2026-07-21
+
+The token-capped sweep completed `init4/run2/eval4` successfully at
+2026-07-21T04:09:18+09:00 after about 5 hours 53 minutes. It started
+`init4/run4/eval4` at 04:20:19 and reached training step 6. At 07:20:32 the
+managed execution terminal disappeared and delivered SIGHUP to the process
+group. All services stopped together with `Hangup` messages. There was no CUDA
+OOM or Python traceback. Valid matrix progress was one of ten configurations.
+
+Plain nohup/setsid and plain-tmux restart probes did no GPU work: outside the
+long-lived cluster wrapper, Apptainer failed preflight with `Could not write
+info to setgroups: Permission denied`. Their preflight-only directories must
+not be counted as experiments.
+
+The active continuation keeps `ctn_gcsudo` alive inside tmux:
+
+- Tmux session: `prorl_miniswe_mb2_ctn_20260721`
+- Tmux server PID: `1103715`
+- `ctn_gcsudo`/wrapper PID: `1103716`
+- Stem: `prorl_miniswe_full_matrix_async2_mb2_tokcap16k_resume_20260721T001113Z`
+- Log: `/NHNHOME/home/profiled_runs/prorl_miniswe_full_matrix_async2_mb2_tokcap16k_resume_20260721T001113Z/sweep.log`
+- Remaining matrix: `4:4 8:4 8:8 8:16 16:4 16:8 16:16 32:16 32:32`
+
+The corrected continuation began at 2026-07-21T09:27:06+09:00. Its first row
+passed Apptainer, GPU isolation, host RAM, and Ray startup preflights. It keeps
+fixed `MICRO_BATCH_SIZE=2`, `MAX_TOKENS_PER_GPU=8192`,
+`USE_DYNAMIC_BATCH_SIZE=0`, all prior Mini-SWE settings, and no Nsight capture.
+Check it with `tmux has-session -t prorl_miniswe_mb2_ctn_20260721` and the log
+above.
