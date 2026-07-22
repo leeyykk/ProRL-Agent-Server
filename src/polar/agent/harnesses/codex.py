@@ -19,6 +19,9 @@ class CodexHarness(BaseHarness):
         # rotation or archival can't clobber them. Absolute path — $HOME won't
         # expand in docker exec -e.
         self._codex_home = f"{RUNTIME_SESSION_DIR}/.codex"
+        self._empty_diff_retries = int(self.settings.get("empty_diff_retries", 0))
+        if self._empty_diff_retries < 0:
+            raise ValueError("empty_diff_retries must be non-negative")
 
     async def setup(self, runtime: BaseRuntime) -> None:
         await runtime.exec(f"mkdir -p {self._codex_home}")
@@ -58,7 +61,7 @@ class CodexHarness(BaseHarness):
             )
 
     def run_steps(self, instruction: str) -> list[ExecInput]:
-        escaped = shlex.quote(instruction)
+        escaped = shlex.quote(_workspace_pinned_instruction(instruction))
         env: dict[str, str] = {
             **self.env,
             "CODEX_HOME": self._codex_home,
@@ -93,6 +96,39 @@ class CodexHarness(BaseHarness):
                 flags.append(f"{cli}={shlex.quote(str(value))}")
 
         flags_str = " ".join(flags)
+        run_command = (
+            f"codex exec {flags_str} -- {escaped} "
+            f"2>&1 </dev/null | tee {RUNTIME_AGENT_LOG_DIR}/codex.txt"
+        )
+        if self._empty_diff_retries:
+            retry_prompt = shlex.quote(
+                "Your previous response ended before making a tracked repository "
+                "edit. Continue the same task now. Use the available tools to make "
+                "the best targeted source-code fix, run relevant tests if practical, "
+                "and do not finish until `git diff --stat` is non-empty."
+            )
+            run_command = (
+                "set -o pipefail; "
+                + run_command
+                + "; status=${PIPESTATUS[0]}; "
+                + 'if [ "$status" -ne 0 ]; then exit "$status"; fi; '
+                + "retry=0; "
+                + f'while [ "$retry" -lt {self._empty_diff_retries} ] '
+                + "&& git diff --quiet -- . && git diff --cached --quiet -- .; do "
+                + 'retry=$((retry + 1)); '
+                + "printf '%s\\n' \"POLAR_CODEX_EMPTY_DIFF_RETRY=${retry}\" "
+                + f"| tee -a {RUNTIME_AGENT_LOG_DIR}/codex.txt; "
+                + f"codex exec resume {flags_str} --last {retry_prompt} "
+                + f"2>&1 </dev/null | tee -a {RUNTIME_AGENT_LOG_DIR}/codex.txt; "
+                + "status=${PIPESTATUS[0]}; "
+                + 'if [ "$status" -ne 0 ]; then exit "$status"; fi; '
+                + "done; "
+                + "if git diff --quiet -- . && git diff --cached --quiet -- .; then "
+                + "printf '%s\\n' 'POLAR_CODEX_EMPTY_DIFF_RETRIES_EXHAUSTED=1' "
+                + f"| tee -a {RUNTIME_AGENT_LOG_DIR}/codex.txt; "
+                + "fi"
+            )
+
         return [
             # Write synthetic auth.json so codex picks up OPENAI_API_KEY
             ExecInput(
@@ -104,13 +140,32 @@ class CodexHarness(BaseHarness):
                 env=env,
             ),
             ExecInput(
-                command=(
-                    f"codex exec {flags_str} -- {escaped} "
-                    f"2>&1 </dev/null | tee {RUNTIME_AGENT_LOG_DIR}/codex.txt"
-                ),
+                command=run_command,
                 env=env,
             ),
         ]
+
+
+def _workspace_pinned_instruction(instruction: str) -> str:
+    return f"""You are already inside the benchmark repository workspace.
+
+Important execution rules:
+- Treat the current working directory as the repository to fix.
+- Modify files in the current working directory only.
+- Do not clone the issue reproduction repository or any linked repository as
+  your working tree. External links in the problem statement are reference
+  material only.
+- Do not end with only analysis or a plan. Continue working until you have
+  edited at least one tracked file in the current repository.
+- Before finishing, run `git diff --stat` and ensure it is non-empty. The
+  evaluator will collect `git diff` from this directory.
+- If tests or reproduction steps are unavailable, still make the best targeted
+  source-code fix you can infer from the repository and problem statement.
+
+Task:
+{instruction}
+"""
+
 
 
 def _cli_model_name(model_name: str | None) -> str:

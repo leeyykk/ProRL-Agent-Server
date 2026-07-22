@@ -882,5 +882,327 @@ POLAR Mini-SWE `init4/run4/eval4` subsequently completed with exit 0 in 38.2
 minutes: 39 terminal `COMPLETED` sessions, 14 resolved (35.9%), 8 unique
 solved task groups, and `evaluated_repo_dir=/polar/session/workspace`.
 
-The active POLAR Codex `init4/run2/eval4` row exposed a liveness problem:
-roughly 12k-token Codex traces exceed the 8,192 training-token cap, every group
+## Emergency zero-context handoff: corrected POLAR Codex rerun — 2026-07-22
+
+This section supersedes every earlier “active” status in this file. At the time
+of writing, no experiment or tmux session is running and GPUs 0, 1, and 2 are
+free. The next task is not another SkyRL or Mini-SWE run. It is a corrected
+POLAR Codex CLI small-parity rerun at two worker points:
+
+1. `init4/run2/eval4`
+2. `init4/run4/eval4`
+
+Run them sequentially with the ready wrapper documented below. The goal is to
+obtain the first Codex result in this lineage where the agent is encouraged to
+continue after an empty diff and the evaluator tests the checkout Codex edited.
+
+### Exact matched experiment
+
+Both configurations use:
+
+- Qwen3.5-4B
+- SWE-Gym 3h200 sandbox dataset
+- one training GPU: GPU 0
+- two rollout GPUs: GPUs 1 and 2
+- tensor parallel size 1
+- 4 rollout batches
+- rollout batch size 4
+- 2 samples per prompt
+- 2 rollout steps
+- microbatch size 1
+- fixed batching: `USE_DYNAMIC_BATCH_SIZE=0`
+- per-trace training cap 32,768
+- async/staleness level 2
+- 4 postrun/evaluator workers
+- SGLang context 40,960
+- maximum prompt 36,864
+- maximum response 4,096
+- maximum completion per model call 2,048
+- Codex empty-diff retries 4
+- in-place evaluation of `/polar/session/workspace`
+- no Nsight capture or report
+
+The exact wrapper is:
+
+`tmp/prorl_codex_fixed_20260722T015407Z/run_codex_fixed_suite.sh`
+
+It invokes the existing matrix assets:
+
+`tmp/prorl_miniswe_full_matrix_20260720T085614Z/`
+
+The wrapper and assets are intentionally ignored local operational files, so
+do not assume a fresh clone contains them. This worktree currently does.
+
+### What the completed cap-16k diagnostic actually showed
+
+The earlier higher-cap suite completed both configurations and proved training
+liveness, but it is invalid for Codex quality:
+
+| Worker point | Wall | Terminal | Resolved | Empty tracked diff | Patch apply failure | Calls | Completion tokens | Dropped over 16,384 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| init4/run2/eval4 | 11m50s | 58 | 0 | 57 | 1 | 346 | 22,831 | 12 |
+| init4/run4/eval4 | 11m49s | 60 | 0 | 57 | 3 | 375 | 26,927 | 12 |
+
+Artifact roots:
+
+- suite:
+  `/NHNHOME/home/profiled_runs/miniswe_small_parity_codex_cap16k_1train2rollout_20260722T002427Z`
+- run2:
+  `/NHNHOME/home/prorl_agent_server_runs/swegym_slime_grpo_3h200/miniswe_small_parity_codex_cap16k_1train2rollout_20260722T002427Z_polar_codex_cap16k_init4_run2`
+- run4:
+  `/NHNHOME/home/prorl_agent_server_runs/swegym_slime_grpo_3h200/miniswe_small_parity_codex_cap16k_1train2rollout_20260722T002427Z_polar_codex_cap16k_init4_run4`
+
+Do not report those two 0% rows as a fair framework-accuracy comparison.
+Raising the cap fixed `accepted=0/4` and allowed three training iterations and
+checkpoints per configuration, but rollout/evaluation were still defective.
+
+### Root causes of the Codex 0%
+
+There were three independent problems:
+
+1. **Premature empty-diff termination.** In 114 of 118 terminal sessions,
+   Codex made no tracked edit. A matched Moto task showed Mini-SWE taking 40
+   turns and fixing `moto/organizations/models.py`, while Codex stopped after
+   8-10 calls with plain assistant text such as “Now let me check
+   responses.py...” and no tool call. Codex CLI treated that prose as the final
+   response, leaving `git diff` empty.
+2. **Wrong evaluator runtime for the four nonempty patches.** Codex used
+   `refresh_runtime: true`, `repo_dir: /testbed`. The evaluator tried to
+   apply the patch to a refreshed read-only image checkout. All four nonempty
+   patches failed with a read-only-filesystem error and never received a
+   meaningful correctness test. The valid Mini-SWE path used
+   `refresh_runtime: false`, `repo_dir: /polar/session/workspace`.
+3. **The original 8,192-token cap was too small.** The Codex initial prompt
+   alone was approximately 11,003 tokens, so every trace in the first attempt
+   was untrainable before considering response tokens.
+
+Codex tool observations remain `tool` messages, so prefix grouping tends to
+merge a full Codex session into one training trace. Mini-SWE shell observations
+are `user` messages, so Mini-SWE turns generally remain separate traces. This
+explains why Codex reaches per-trace caps sooner, but the old 8,192 failure did
+not require merging to fail: the initial prompt already exceeded the cap.
+
+### Maintained code fix in this worktree
+
+Uncommitted maintained changes currently are:
+
+- `src/polar/agent/harnesses/codex.py`
+- `tests/agent/test_codex_harness.py`
+- this handoff
+- the living comparison report
+
+The Codex harness now:
+
+- pins the task to the existing benchmark workspace
+- tells Codex not to stop with only analysis/a plan
+- checks both staged and unstaged tracked diffs
+- if the diff is empty, resumes the same Codex conversation with
+  `codex exec resume --last`
+- allows `empty_diff_retries` (the run uses 4)
+- logs `POLAR_CODEX_EMPTY_DIFF_RETRY=N`
+- logs `POLAR_CODEX_EMPTY_DIFF_RETRIES_EXHAUSTED=1` if all retries remain
+  empty
+- preserves nonzero Codex exit status through `pipefail`
+
+Focused validation already passed:
+
+```bash
+cd /NHNHOME/home/ProRL-Agent-Server/.worktrees/prorl-miniswe-harness
+PYTHONPATH=src /NHNHOME/home/ProRL-Agent-Server/.venv/bin/python -m pytest -q \
+  tests/agent/test_codex_harness.py \
+  tests/agent/test_mini_swe_agent_harness.py
+# 6 passed
+
+git diff --check
+# passed
+```
+
+Important: the shared virtualenv normally imports the main checkout. Always
+prefix branch tests with `PYTHONPATH=src`.
+
+The runtime snapshot used by the experiment already contains the maintained
+Codex source:
+
+`tmp/prorl_miniswe_full_matrix_20260720T085614Z/runtime_src/polar/agent/harnesses/codex.py`
+
+Before launch, verify it still matches:
+
+```bash
+cmp src/polar/agent/harnesses/codex.py \
+  tmp/prorl_miniswe_full_matrix_20260720T085614Z/runtime_src/polar/agent/harnesses/codex.py
+```
+
+If it does not match, copy the maintained source into the snapshot and rerun
+the focused tests.
+
+### Runtime failure and the working repair
+
+The failed corrected-retry suite at:
+
+`/NHNHOME/home/profiled_runs/miniswe_small_parity_codex_fixed_retry4_cap32k_inplace_1train2rollout_20260722T020800Z`
+
+did no GPU work. Both rows failed Apptainer preflight with:
+
+```text
+Could not write info to setgroups: Permission denied
+Error while waiting event for user namespace mappings
+```
+
+The cause was environmental:
+
+- `/NHNHOME/home` is mounted `nosuid`.
+- The existing Apptainer 1.5.2 build reports
+  `APPTAINER_SUID_INSTALL=0`; copying it to `/var/tmp` cannot change that
+  compile-time setting.
+- Rootless UID mapping was restored with `uidmap`, subordinate ranges, and
+  `/dev/fuse`, but this outer container still forbids the needed mount
+  namespace for an unprivileged process.
+- Running SIF images through a privileged runtime also fails because the server
+  exposes no loop devices.
+
+The working repair installed Ubuntu SingularityCE 4.1.1:
+
+```text
+/usr/bin/singularity
+SINGULARITY_SUID_INSTALL=1
+/usr/lib/x86_64-linux-gnu/singularity/bin/starter-suid mode 4755
+```
+
+SIF preflight still fails with “no loop devices available.” The existing
+extracted SWE-Gym sandbox dataset works. This exact preflight passed:
+
+```bash
+singularity exec \
+  --no-mount bind-paths \
+  --bind /NHNHOME/home/prorl_agent_server_env/agent_cli/codex_0.121.0:/agent-cli:ro \
+  /NHNHOME/home/prorl_agent_server_env/apptainer_sandboxes/swegym_b200/getmoto__moto-4918 \
+  /bin/sh -c 'test -d /testbed && test -x /agent-cli/bin/codex && PATH=/agent-cli/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin codex --version'
+# codex-cli 0.121.0
+```
+
+The suite must therefore use:
+
+```text
+POLAR_APPTAINER_BIN=/usr/bin/singularity
+POLAR_APPTAINER_EXEC_ARGS=--no-mount bind-paths
+SWEGYM_DATA=/NHNHOME/home/prorl_agent_server_env/data/swegym_train_apptainer_3h200_sandbox.jsonl
+```
+
+Do not add `--no-privs` to the packaged Singularity invocation, and do not
+switch the dataset back to `.sif` image paths.
+
+If the outer server/container is recreated and `/usr/bin/singularity` is
+missing, reinstall the prerequisites:
+
+```bash
+/engrid/ensh/gpubin/ctn_gcsudo apt-get install -y uidmap singularity-container
+/engrid/ensh/gpubin/ctn_gcsudo usermod \
+  --add-subuids 100000-165535 --add-subgids 100000-165535 via_lab
+```
+
+The Singularity sandbox path itself does not depend on the temporary
+`/var/tmp` Apptainer copies or the manually created `/dev/fuse` node.
+
+### Required local launcher fixes already applied
+
+Two ignored operational files were corrected:
+
+1. `run_miniswe_full_matrix.sh` now forwards
+   `CODEX_EMPTY_DIFF_RETRIES` and `CODEX_EVALUATOR_IN_PLACE` in its
+   `launch_env` array. Without this, the wrapper values silently become
+   launcher defaults and the retry/evaluator fixes are not active.
+2. `run_codex_fixed_suite.sh` now selects `/usr/bin/singularity` with
+   `--no-mount bind-paths`.
+
+Verify all three scripts before launching:
+
+```bash
+bash -n tmp/prorl_codex_fixed_20260722T015407Z/run_codex_fixed_suite.sh
+bash -n tmp/prorl_miniswe_full_matrix_20260720T085614Z/run_miniswe_full_matrix.sh
+bash -n tmp/prorl_miniswe_full_matrix_20260720T085614Z/launch_qwen3_4b_3h200.sh
+
+rg -n 'CODEX_EMPTY_DIFF_RETRIES|CODEX_EVALUATOR_IN_PLACE|POLAR_APPTAINER_BIN' \
+  tmp/prorl_codex_fixed_20260722T015407Z/run_codex_fixed_suite.sh \
+  tmp/prorl_miniswe_full_matrix_20260720T085614Z/run_miniswe_full_matrix.sh
+```
+
+### Exact launch procedure
+
+First verify no prior experiment and no GPU allocation:
+
+```bash
+tmux ls
+nvidia-smi --query-gpu=index,memory.used,utilization.gpu --format=csv,noheader
+```
+
+Then launch a fresh stem in tmux:
+
+```bash
+cd /NHNHOME/home/ProRL-Agent-Server/.worktrees/prorl-miniswe-harness
+stamp=$(date -u +%Y%m%dT%H%M%SZ)
+suite_stem="miniswe_small_parity_codex_fixed_retry4_cap32k_inplace_1train2rollout_${stamp}"
+tmux_name="polar_codex_fixed_${stamp}"
+
+tmux new-session -d -s "${tmux_name}" \
+  "cd /NHNHOME/home/ProRL-Agent-Server/.worktrees/prorl-miniswe-harness && SUITE_STEM=${suite_stem} bash tmp/prorl_codex_fixed_20260722T015407Z/run_codex_fixed_suite.sh"
+
+printf 'tmux=%s\nsuite=%s\n' "${tmux_name}" "${suite_stem}"
+```
+
+The wrapper runs `4:2` and then `4:4` automatically. Do not launch the
+second row manually. Expect more than the old 23.7-minute total because up to
+four Codex resumes can add calls; allow roughly 30-90 minutes unless measured
+progress indicates otherwise.
+
+### Monitoring and validation gates
+
+With `suite_stem` and `tmux_name` from launch:
+
+```bash
+tmux has-session -t "${tmux_name}"
+tail -100 "/NHNHOME/home/profiled_runs/${suite_stem}/suite.log"
+tail -100 "/NHNHOME/home/profiled_runs/${suite_stem}/polar_codex_fixed/sweep.log"
+cat "/NHNHOME/home/profiled_runs/${suite_stem}/manifest.tsv"
+nvidia-smi --query-gpu=index,memory.used,utilization.gpu --format=csv,noheader
+```
+
+Immediately after the first run directory appears, verify generated settings:
+
+```bash
+rg -n 'empty_diff_retries|refresh_runtime|repo_dir|max_tokens_per_gpu|MICRO_BATCH_SIZE' \
+  "/NHNHOME/home/prorl_agent_server_runs/swegym_slime_grpo_3h200/${suite_stem}_polar_codex_fixed_init4_run2"
+```
+
+Required gates before calling a row valid:
+
+- Apptainer/Singularity preflight passes; no `setgroups`, loop-device, or
+  read-only patch-application error.
+- Generated agent settings contain `empty_diff_retries: 4`.
+- Evaluator uses `refresh_runtime: false` and
+  `repo_dir: /polar/session/workspace`.
+- Agent logs show the retry marker when an initial Codex turn leaves no diff.
+- At least nonempty patches reach actual evaluator execution. Zero resolved is
+  only interpretable after confirming this.
+- Training accepts traces and completes without OOM. The 32,768 cap may still
+  drop an unusually long merged session; count and report drops.
+- Both manifest rows finish with exit code 0.
+
+If preflight still uses the old Apptainer path, the ignored wrapper edit was
+lost. Restore the three runtime values above. If settings still show retry 0 or
+a refreshed evaluator, the matrix controller is not forwarding the two Codex
+variables; restore them in `launch_env`.
+
+### Files to update after completion
+
+Update both:
+
+- `examples/swegym_slime_grpo_3h200_qwen3_4b/POLAR_MINISWE_SMALL_PARITY_SKYRL4_CODEX_COMPARISON.md`
+- this handoff
+
+Record wall time, terminal status counts, resolved count, unique solved groups,
+empty versus nonempty diffs, patch-application failures, retry-marker counts,
+calls, completion tokens, over-cap drops, training timing, and GPU idle.
+
+The living comparison report was already updated with all results known before
+this corrected rerun. It explicitly marks the cap-16k Codex rows invalid for
+quality and records the failed corrected-retry preflight.

@@ -1,8 +1,8 @@
 # Small-Workload SkyRL, POLAR Mini-SWE, and POLAR Codex Comparison
 
-Living report updated from measured artifacts on 2026-07-22. Three rows are
-complete. The original Codex 4/2/4 row is an invalid non-terminating
-configuration; it is not a quality or speed result. No Nsight data is used.
+Living report updated from measured artifacts on 2026-07-22. All five rows in
+the table completed, but both Codex rows are diagnostic runs rather than valid
+quality comparisons. No Nsight data is used.
 
 ## Current result
 
@@ -20,10 +20,14 @@ experiment lineage. Every resolved artifact records `evaluated_repo_dir` as
 the agent edited. The old zero-resolved POLAR runs evaluated untouched
 `/testbed` and must not be used as accuracy measurements.
 
-The first small-parity Codex 4/2/4 attempt used an 8,192-token per-trace
-training cap. Codex serialized each session as one 11k-24k prompt/tool/response
-trace, so every trace was dropped and the rollout manager remained at
-`accepted=0/4`. That row is invalid and must be rerun with a higher cap.
+The corrected-cap Codex suite completed both worker points in 23.7 minutes
+total and trained for three iterations per point without OOM. The run2 point
+persisted 58 terminal sessions and the run4 point persisted 60; neither
+resolved a task. Those zeroes are not usable Codex accuracy measurements:
+57/58 run2 sessions and 57/60 run4 sessions exited without any tracked patch.
+The four sessions that did produce a patch were then evaluated through a
+refreshed, read-only `/testbed`, and every patch failed to apply. A corrected
+retry is required before comparing Codex quality with Mini-SWE.
 
 ## Main comparison
 
@@ -32,8 +36,8 @@ trace, so every trace was dropped and the rollout manager remained at
 | SkyRL + Mini-SWE | generation workers 4 | complete | 32.7 | 40 | 12 | 30.0% | 40 | 36.10 | 8864.6 |
 | POLAR + Mini-SWE | init 4, run 2, eval 4 | complete | 47.1 | 29 | 14 | 48.3% | 32 | 38.03 | 6604.7 |
 | POLAR + Mini-SWE | init 4, run 4, eval 4 | complete | 38.2 | 39 | 14 | 35.9% | 40 | 39.50 | 7477.6 |
-| POLAR + Codex CLI | init 4, run 2, eval 4 | rerunning: 16k cap | pending | pending | pending | pending | pending | pending | pending |
-| POLAR + Codex CLI | init 4, run 4, eval 4 | queued after corrected run2 | pending | pending | pending | pending | pending | pending | pending |
+| POLAR + Codex CLI | init 4, run 2, eval 4 | complete; invalid for quality | 11.8 | 58 | 0 | 0.0% | 58 | 5.97 | 393.6 |
+| POLAR + Codex CLI | init 4, run 4, eval 4 | complete; invalid for quality | 11.8 | 60 | 0 | 0.0% | 60 | 6.25 | 448.8 |
 
 POLAR run2 produced 211,349 completion tokens and 1,217 model calls across 32
 nonzero traces. That is 0.616 terminal trajectories/minute and approximately
@@ -46,6 +50,40 @@ nonzero traced sessions. That is 1.02 terminal trajectories/minute and about
 SkyRL workers4 at 32.7 minutes versus POLAR run4 at 38.2 minutes: POLAR was 5.5
 minutes, or 16.8%, slower on this small sample while processing 39 versus 40
 terminal trajectories.
+
+## POLAR Codex cap-16k diagnostic
+
+| Worker point | Wall | Terminal sessions | LLM calls | Completion tokens | Empty tracked diff | Patch apply failures | Dropped over cap |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| init4/run2/eval4 | 11m50s | 58 | 346 | 22,831 | 57 | 1 | 12 |
+| init4/run4/eval4 | 11m49s | 60 | 375 | 26,927 | 57 | 3 | 12 |
+
+Both points exited 0, checkpointed, and completed three training iterations.
+Raising the trace cap from 8,192 to 16,384 therefore fixed training liveness,
+but not rollout correctness. The run2 rollout steps recorded 24/16/18 sessions,
+141/99/106 calls, and 9,542/6,159/7,130 completion tokens. Run4 recorded
+28/16/16 sessions, 182/83/110 calls, and 13,033/4,587/9,307 completion tokens.
+
+The dominant failure was premature Codex termination. In a matched task where
+Mini-SWE ran 40 model turns and edited `moto/organizations/models.py`, Codex
+stopped after 8-10 calls with an ordinary assistant sentence describing the
+next inspection step but no tool call. Codex CLI treated that sentence as its
+final answer, so the checkout stayed unchanged. The maintained harness now
+detects an empty tracked diff and resumes the same Codex conversation; that
+fix has unit coverage but has not yet produced a completed experiment.
+
+The remaining four nonempty attempts exposed a separate evaluator mismatch.
+Codex used `refresh_runtime: true` and edited `/testbed`, whereas the successful
+Mini-SWE rows used `refresh_runtime: false` and evaluated
+`/polar/session/workspace`. All four Codex patches failed application with a
+read-only-filesystem error, so none reached a meaningful correctness test.
+
+Codex trace construction is also different from Mini-SWE. Codex tool
+observations remain `tool` messages and prefix grouping merges the session into
+one training trace. Mini-SWE shell observations are `user` messages, so its
+turns generally remain separate traces. For the original failed run, however,
+the decisive problem was simpler: Codex's initial prompt alone was about
+11,003 tokens, already above the old 8,192-token cap.
 
 ## POLAR Mini-SWE run2 detail
 
@@ -104,7 +142,7 @@ and GPU2 for training; POLAR used GPU0 for training and GPUs 1-2 for rollout.
 | Agent context | 40,960 tokens |
 | Maximum completion per model call | 2,048 tokens |
 | Maximum Mini-SWE turns | 40 |
-| POLAR train trace cap | 8,192 for Mini-SWE; corrected Codex rerun 16,384; failed Codex attempt 8,192 |
+| POLAR train trace cap | 8,192 for Mini-SWE; completed Codex diagnostic 16,384; next corrected Codex retry 32,768 |
 | Profiling | Lightweight summaries only; Nsight disabled |
 
 Mini-SWE uses the same remaining-turn reminder behavior in both frameworks.
@@ -112,20 +150,21 @@ The training/inference implementations still differ: SkyRL uses FSDP/vLLM,
 while POLAR uses Megatron/SGLang. SkyRL exposes one generation-worker pool;
 POLAR separately controls init, run, and evaluator workers.
 
-## Pending update map
-
-Fill Codex rows only after a corrected-cap row reaches exit status 0:
+## Codex run and retry map
 
 - Invalid 8,192-cap Codex run2 attempt:
   `/NHNHOME/home/prorl_agent_server_runs/swegym_slime_grpo_3h200/miniswe_small_parity_1train2rollout_20260721T083500Z_polar_codex_init4_run2`
-- Corrected 16,384-cap run2:
+- Completed 16,384-cap diagnostic run2:
   `/NHNHOME/home/prorl_agent_server_runs/swegym_slime_grpo_3h200/miniswe_small_parity_codex_cap16k_1train2rollout_20260722T002427Z_polar_codex_cap16k_init4_run2`
-- Corrected 16,384-cap run4 (queued):
+- Completed 16,384-cap diagnostic run4:
   `/NHNHOME/home/prorl_agent_server_runs/swegym_slime_grpo_3h200/miniswe_small_parity_codex_cap16k_1train2rollout_20260722T002427Z_polar_codex_cap16k_init4_run4`
+- Corrected retry suite (empty-diff resume, in-place evaluation, cap 32,768):
+  `/NHNHOME/home/profiled_runs/miniswe_small_parity_codex_fixed_retry4_cap32k_inplace_1train2rollout_20260722T020800Z`
 
-For every completed row, record wall time, terminal status counts, resolved
-trajectory count, unique solved task groups, nonzero trace count, calls,
-completion tokens, steady training timing, and role-aware GPU idle fractions.
+The corrected retry has not run successfully yet. Its first launch attempt
+failed during Apptainer preflight, before GPU allocation, with
+`Could not write info to setgroups: Permission denied`. No corrected-retry
+quality result exists as of this update.
 
 ## Source artifacts
 
@@ -153,7 +192,8 @@ Corrected Codex 16,384-cap suite:
 
 - Suite: `/NHNHOME/home/profiled_runs/miniswe_small_parity_codex_cap16k_1train2rollout_20260722T002427Z`
 - Sweep log: `polar_codex_cap16k/sweep.log`
-- Tmux: `polar_codex_cap16k_20260722T002427Z`
+- Run2 lightweight summaries: `/NHNHOME/home/prorl_agent_server_runs/swegym_slime_grpo_3h200/miniswe_small_parity_codex_cap16k_1train2rollout_20260722T002427Z_polar_codex_cap16k_init4_run2/lightweight_trace_summary/`
+- Run4 lightweight summaries: `/NHNHOME/home/prorl_agent_server_runs/swegym_slime_grpo_3h200/miniswe_small_parity_codex_cap16k_1train2rollout_20260722T002427Z_polar_codex_cap16k_init4_run4/lightweight_trace_summary/`
 
 Original suite controller:
 
@@ -167,4 +207,7 @@ variance. Trajectory-level resolution is not the same as unique-task pass rate
 when each prompt has two samples. The table reports both raw resolved
 trajectories and the unique solved-task count in the detail text. The matched
 SkyRL/POLAR speed observation is one small run. The failed 8,192-cap Codex
-attempt is excluded from all speed and quality conclusions.
+attempt is excluded from all speed and quality conclusions. The completed
+16,384-cap Codex rows measure runtime and training liveness only; their 0%
+resolved rates are excluded from framework-quality conclusions because patch
+generation and evaluation were both defective.
