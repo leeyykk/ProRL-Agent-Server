@@ -379,7 +379,9 @@ run4: /NHNHOME/home/prorl_agent_server_runs/swegym_slime_grpo_3h200/miniswe_smal
 
 It runs 4/2/4 and then 4/4/4 automatically with microbatch 1,
 `MAX_TOKENS_PER_GPU=16384`, one training GPU, two rollout GPUs, and no Nsight.
-At the first audit, rollout batch 1 reached `perf 1` with four accepted
-samples and 18 terminal artifacts. One 16,542-token trace was dropped, but the
-run did not remain at `accepted=0/4`. Check for a successful first training
-step and OOM before declaring the new cap fully validated.
+Rollout batch 1 reached `perf 1` with four accepted samples and 18 terminal
+artifacts. One 16,542-token trace was dropped, but the run did not remain at
+`accepted=0/4`. The first full training step then completed without OOM:
+accepted traces averaged 13,957 total tokens, actor training took 134.1
+seconds, and actor throughput was 832.9 tokens/s. The 16,384 cap is therefore
+validated for both rollout admission and a complete training step.
