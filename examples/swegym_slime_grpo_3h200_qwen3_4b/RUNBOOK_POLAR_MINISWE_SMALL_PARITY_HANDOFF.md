@@ -362,3 +362,24 @@ git status --short
 - Verify Mini-SWE evaluated `/polar/session/workspace`.
 - Exclude the old POLAR 0%-resolved result.
 - Validate every row, update the living report, and push relevant branch changes.
+
+## 12. Active corrected Codex continuation - 2026-07-22
+
+The non-terminating 8,192-cap suite was stopped by terminating its verified
+process group after the comparison report was updated. A Codex-only corrected
+continuation is active:
+
+```text
+tmux: polar_codex_cap16k_20260722T002427Z
+suite: /NHNHOME/home/profiled_runs/miniswe_small_parity_codex_cap16k_1train2rollout_20260722T002427Z
+launcher: tmp/prorl_codex_cap16k_20260722T002427Z/run_codex_cap16k_suite.sh
+run2: /NHNHOME/home/prorl_agent_server_runs/swegym_slime_grpo_3h200/miniswe_small_parity_codex_cap16k_1train2rollout_20260722T002427Z_polar_codex_cap16k_init4_run2
+run4: /NHNHOME/home/prorl_agent_server_runs/swegym_slime_grpo_3h200/miniswe_small_parity_codex_cap16k_1train2rollout_20260722T002427Z_polar_codex_cap16k_init4_run4
+```
+
+It runs 4/2/4 and then 4/4/4 automatically with microbatch 1,
+`MAX_TOKENS_PER_GPU=16384`, one training GPU, two rollout GPUs, and no Nsight.
+At the first audit, rollout batch 1 reached `perf 1` with four accepted
+samples and 18 terminal artifacts. One 16,542-token trace was dropped, but the
+run did not remain at `accepted=0/4`. Check for a successful first training
+step and OOM before declaring the new cap fully validated.
