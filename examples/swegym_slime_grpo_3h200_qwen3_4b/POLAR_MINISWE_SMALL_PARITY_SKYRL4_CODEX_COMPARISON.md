@@ -1,8 +1,8 @@
 # Small-Workload SkyRL, POLAR Mini-SWE, and POLAR Codex Comparison
 
-Living report updated from measured artifacts on 2026-07-22. All five rows in
-the table completed, but both Codex rows are diagnostic runs rather than valid
-quality comparisons. No Nsight data is used.
+Living report updated from measured artifacts on 2026-07-23. All five matched
+rows are complete. The original Codex rows used a broken model/tool path and
+are superseded by the final tool-fixed rows below. No Nsight data is used.
 
 ## Current result
 
@@ -20,14 +20,13 @@ experiment lineage. Every resolved artifact records `evaluated_repo_dir` as
 the agent edited. The old zero-resolved POLAR runs evaluated untouched
 `/testbed` and must not be used as accuracy measurements.
 
-The corrected-cap Codex suite completed both worker points in 23.7 minutes
-total and trained for three iterations per point without OOM. The run2 point
-persisted 58 terminal sessions and the run4 point persisted 60; neither
-resolved a task. Those zeroes are not usable Codex accuracy measurements:
-57/58 run2 sessions and 57/60 run4 sessions exited without any tracked patch.
-The four sessions that did produce a patch were then evaluated through a
-refreshed, read-only `/testbed`, and every patch failed to apply. A corrected
-retry is required before comparing Codex quality with Mini-SWE.
+The final Codex rerun additionally repaired the advertised patch tool, added
+two bounded review passes, refreshed the runtime, and evaluated a writable
+copy at `/polar/session/workspace`. Both worker points completed all 40
+terminal sessions with no patch-application or evaluator errors.
+`init4/run2/eval4` resolved 6 trajectories across 5 unique task groups;
+`init4/run4/eval4` resolved 8 across 6 unique groups. These replace the
+earlier zero-resolved Codex rows as the fair quality comparison.
 
 ## Main comparison
 
@@ -36,8 +35,8 @@ retry is required before comparing Codex quality with Mini-SWE.
 | SkyRL + Mini-SWE | generation workers 4 | complete | 32.7 | 40 | 12 | 30.0% | 40 | 36.10 | 8864.6 |
 | POLAR + Mini-SWE | init 4, run 2, eval 4 | complete | 47.1 | 29 | 14 | 48.3% | 32 | 38.03 | 6604.7 |
 | POLAR + Mini-SWE | init 4, run 4, eval 4 | complete | 38.2 | 39 | 14 | 35.9% | 40 | 39.50 | 7477.6 |
-| POLAR + Codex CLI | init 4, run 2, eval 4 | complete; invalid for quality | 11.8 | 58 | 0 | 0.0% | 58 | 5.97 | 393.6 |
-| POLAR + Codex CLI | init 4, run 4, eval 4 | complete; invalid for quality | 11.8 | 60 | 0 | 0.0% | 60 | 6.25 | 448.8 |
+| POLAR + Codex CLI | init 4, run 2, eval 4 | complete | 54.9 | 40 | 6 | 15.0% | 40 | 52.00 | 9797.5 |
+| POLAR + Codex CLI | init 4, run 4, eval 4 | complete | 54.0 | 40 | 8 | 20.0% | 40 | 52.90 | 10498.2 |
 
 POLAR run2 produced 211,349 completion tokens and 1,217 model calls across 32
 nonzero traces. That is 0.616 terminal trajectories/minute and approximately
@@ -51,47 +50,11 @@ SkyRL workers4 at 32.7 minutes versus POLAR run4 at 38.2 minutes: POLAR was 5.5
 minutes, or 16.8%, slower on this small sample while processing 39 versus 40
 terminal trajectories.
 
-## POLAR Codex cap-16k diagnostic
-
-| Worker point | Wall | Terminal sessions | LLM calls | Completion tokens | Empty tracked diff | Patch apply failures | Dropped over cap |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| init4/run2/eval4 | 11m50s | 58 | 346 | 22,831 | 57 | 1 | 12 |
-| init4/run4/eval4 | 11m49s | 60 | 375 | 26,927 | 57 | 3 | 12 |
-
-Both points exited 0, checkpointed, and completed three training iterations.
-Raising the trace cap from 8,192 to 16,384 therefore fixed training liveness,
-but not rollout correctness. The run2 rollout steps recorded 24/16/18 sessions,
-141/99/106 calls, and 9,542/6,159/7,130 completion tokens. Run4 recorded
-28/16/16 sessions, 182/83/110 calls, and 13,033/4,587/9,307 completion tokens.
-
-The dominant failure was premature Codex termination. In a matched task where
-Mini-SWE ran 40 model turns and edited `moto/organizations/models.py`, Codex
-stopped after 8-10 calls with an ordinary assistant sentence describing the
-next inspection step but no tool call. Codex CLI treated that sentence as its
-final answer, so the checkout stayed unchanged. The maintained harness now
-detects an empty tracked diff and resumes the same Codex conversation; that
-fix has unit coverage but has not yet produced a completed experiment.
-
-The remaining four nonempty attempts exposed a separate evaluator mismatch.
-Codex used `refresh_runtime: true` and edited `/testbed`, whereas the successful
-Mini-SWE rows used `refresh_runtime: false` and evaluated
-`/polar/session/workspace`. All four Codex patches failed application with a
-read-only-filesystem error, so none reached a meaningful correctness test.
-
-Codex trace construction is also different from Mini-SWE. Codex tool
-observations remain `tool` messages and prefix grouping merges the session into
-one training trace. Mini-SWE shell observations are `user` messages, so its
-turns generally remain separate traces. For the original failed run, however,
-the decisive problem was simpler: Codex's initial prompt alone was about
-11,003 tokens, already above the old 8,192-token cap.
-
 ## POLAR Mini-SWE run2 detail
 
-| Rollout batch | Completed-session resolved rate | Rollout success rate | Mean run time |
-| --- | ---: | ---: | ---: |
-| 1 | 12.5% | 100% | 183.3 s |
-| 2 | 75.0% | 100% | 168.7 s |
-| 3 | 75.0% | 100% | 168.1 s |
+Rollout batches 1-3 had completed-session resolved rates of 12.5%, 75.0%,
+and 75.0%, respectively. Rollout success was 100% in every batch, with mean
+run times of 183.3 s, 168.7 s, and 168.1 s.
 
 Final persisted artifacts, rather than a simple mean of batch rates, define the
 reported 14/29 outcome. The result directory contains 29 terminal files, all
@@ -100,11 +63,9 @@ groups because two samples were generated per prompt.
 
 ## POLAR Mini-SWE run4 detail
 
-| Rollout batch | Completed-session resolved rate | Rollout success rate | Mean run time |
-| --- | ---: | ---: | ---: |
-| 1 | 25.0% | 100% | 257.0 s |
-| 2 | 50.0% | 100% | 178.6 s |
-| 3 | 37.5% | 100% | 171.1 s |
+Rollout batches 1-3 had completed-session resolved rates of 25.0%, 50.0%,
+and 37.5%, respectively. Rollout success was 100% in every batch, with mean
+run times of 257.0 s, 178.6 s, and 171.1 s.
 
 Final artifacts contain 39 terminal files, all `COMPLETED`; 14 are resolved
 across 8 unique task groups. All resolved evaluations targeted
@@ -112,59 +73,72 @@ across 8 unique task groups. All resolved evaluations targeted
 
 ## Training and GPU behavior
 
-| Metric | SkyRL workers4 | POLAR run2 | POLAR run4 |
-| --- | ---: | ---: | ---: |
-| Steady train time/step | pending extraction | 407.2 s | 434.4 s |
-| Actor train time/step | pending extraction | 292.1 s | 315.8 s |
-| Reference logprob time/step | pending extraction | 70.1 s | 71.6 s |
-| Policy logprob time/step | pending extraction | 44.7 s | 46.6 s |
-| Actor train tokens/s | pending extraction | 1607.3 | 1688.4 |
-| Train-GPU idle | 43.6% | 60.8% | 46.8% |
-| Rollout-GPU idle, mean | 75.9% | 34.8% | 21.2% |
+| Metric | SkyRL Mini-SWE workers4 | POLAR Mini-SWE run2 | POLAR Mini-SWE run4 | POLAR Codex run2 | POLAR Codex run4 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Steady train-phase time/update | not collected | 407.2 s | 434.4 s | 533.0 s | 501.8 s |
+| Actor optimization time/update | not collected | 292.1 s | 315.8 s | 410.2 s | 386.1 s |
+| Reference logprob time/update | not collected | 70.1 s | 71.6 s | not retained | not retained |
+| Policy logprob time/update | not collected | 44.7 s | 46.6 s | not retained | not retained |
+| Actor train tokens/s | not collected | 1607.3 | 1688.4 | 1280.6 | 1296.1 |
+| Train-GPU idle | 43.6% | 60.8% | 46.8% | 26.8% | 24.6% |
+| Rollout-GPU idle, mean | 75.9% | 34.8% | 21.2% | 74.8% | 76.7% |
 
-POLAR steady training values average steps 2 and 3, excluding the first step's
-startup wait. GPU roles differ by framework: SkyRL used GPUs 0-1 for inference
+POLAR train-phase values average outer updates 2 and 3, excluding the first
+update. The `train` timer begins after rollout data is available and comprises
+reference log probabilities, policy log probabilities, actor optimization, and
+small bookkeeping overhead. Asynchronous rollout generation is not included in
+this timer and can overlap training; only wall time is end-to-end. SkyRL did not
+retain equivalent phase timers, so those cells say `not collected` rather than
+`pending extraction`. GPU roles differ by framework: SkyRL used GPUs 0-1 for inference
 and GPU2 for training; POLAR used GPU0 for training and GPUs 1-2 for rollout.
+
+## Execution and patch detail
+
+| Metric | SkyRL Mini-SWE workers4 | POLAR Mini-SWE run2 | POLAR Mini-SWE run4 | POLAR Codex run2 | POLAR Codex run4 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Wall time | 32.7 min | 47.1 min | 38.2 min | 54.9 min | 54.0 min |
+| Terminal status | 40 terminal | 29 COMPLETED | 39 COMPLETED | 40 COMPLETED | 40 COMPLETED |
+| Resolved / unique solved groups | 12 / not reported | 14 / 8 | 14 / 8 | 6 / 5 | 8 / 6 |
+| Empty / nonempty tracked diff | not reported | not reported | not reported | 21 / 19 | 20 / 20 |
+| Nonempty patches evaluated in workspace | not reported | resolved artifacts verified | resolved artifacts verified | 19 | 20 |
+| Patch-application / evaluator failures | not reported | 0 evaluator-path errors in resolved artifacts | 0 evaluator-path errors in resolved artifacts | 0 / 0 | 0 / 0 |
+| Model calls | 1,444 | 1,217 | 1,580 | 2,080 | 2,116 |
+| Completion tokens | 354,584 | 211,349 | 299,105 | 391,900 | 419,928 |
+| Persisted traces over configured cap | not reported | not reported | not reported | 0 / 258 | 1 / 250 |
+
+The final Codex runs used the repaired advertised patch tool, four empty-diff
+retries, and two same-session review retries. Unlike the superseded zero-result
+suite, neither final row recorded a patch-application or evaluator failure.
+Mini-SWE still uses its shell loop and remaining-turn reminder, whereas Codex
+uses bounded continuation behavior, so call and token counts reflect different
+agent-control policies. The SWE-Gym fallback grader is also all-or-nothing: a
+nonzero combined pytest exit marks every listed FAIL_TO_PASS and PASS_TO_PASS
+target as failed; those lists do not prove every individual test failed.
 
 ## Matched setup
 
-| Axis | Value |
-| --- | --- |
-| Model | Qwen3.5-4B |
-| Data | SWE-Gym 3h200 lineage; 16-row small training workload |
-| Rollout batches | 4 |
-| Prompts per batch | 4 |
-| Samples per prompt | 2 |
-| Training microbatch | 1 |
-| Async/staleness level | 2 |
-| GPU layout | 1 training GPU, 2 rollout GPUs |
-| Tensor parallel size | 1 |
-| Agent context | 40,960 tokens |
-| Maximum completion per model call | 2,048 tokens |
-| Maximum Mini-SWE turns | 40 |
-| POLAR train trace cap | 8,192 for Mini-SWE; completed Codex diagnostic 16,384; next corrected Codex retry 32,768 |
-| Profiling | Lightweight summaries only; Nsight disabled |
+| Axis | SkyRL Mini-SWE workers4 | POLAR Mini-SWE run2 | POLAR Mini-SWE run4 | POLAR Codex run2 | POLAR Codex run4 |
+| --- | --- | --- | --- | --- | --- |
+| Model | Qwen3.5-4B | Qwen3.5-4B | Qwen3.5-4B | Qwen3.5-4B | Qwen3.5-4B |
+| Data | SWE-Gym 3h200 lineage | same 16-row workload | same 16-row workload | same 16-row workload | same 16-row workload |
+| Worker point | generation workers 4 | init4/run2/eval4 | init4/run4/eval4 | init4/run2/eval4 | init4/run4/eval4 |
+| Rollout batches | 4 | 4 | 4 | 4 | 4 |
+| Prompts per batch | 4 | 4 | 4 | 4 | 4 |
+| Samples per prompt | 2 | 2 | 2 | 2 | 2 |
+| Training microbatch | 1 | 1 | 1 | 1 | 1 |
+| Async/staleness level | 2 | 2 | 2 | 2 | 2 |
+| GPU layout | 1 train, 2 rollout | 1 train, 2 rollout | 1 train, 2 rollout | 1 train, 2 rollout | 1 train, 2 rollout |
+| Agent harness | Mini-SWE | Mini-SWE | Mini-SWE | Codex CLI | Codex CLI |
+| Agent context | 40,960 | 40,960 | 40,960 | 40,960 | 40,960 |
+| Maximum completion/call | 2,048 | 2,048 | 2,048 | 2,048 | 2,048 |
+| Maximum agent turns | 40 | 40 | 40 | Codex-controlled plus retries | Codex-controlled plus retries |
+| POLAR train trace cap | n/a | 8,192 | 8,192 | 32,768 | 32,768 |
+| Profiling | lightweight; no Nsight | lightweight; no Nsight | lightweight; no Nsight | lightweight; no Nsight | lightweight; no Nsight |
 
 Mini-SWE uses the same remaining-turn reminder behavior in both frameworks.
 The training/inference implementations still differ: SkyRL uses FSDP/vLLM,
 while POLAR uses Megatron/SGLang. SkyRL exposes one generation-worker pool;
 POLAR separately controls init, run, and evaluator workers.
-
-## Codex run and retry map
-
-- Invalid 8,192-cap Codex run2 attempt:
-  `/NHNHOME/home/prorl_agent_server_runs/swegym_slime_grpo_3h200/miniswe_small_parity_1train2rollout_20260721T083500Z_polar_codex_init4_run2`
-- Completed 16,384-cap diagnostic run2:
-  `/NHNHOME/home/prorl_agent_server_runs/swegym_slime_grpo_3h200/miniswe_small_parity_codex_cap16k_1train2rollout_20260722T002427Z_polar_codex_cap16k_init4_run2`
-- Completed 16,384-cap diagnostic run4:
-  `/NHNHOME/home/prorl_agent_server_runs/swegym_slime_grpo_3h200/miniswe_small_parity_codex_cap16k_1train2rollout_20260722T002427Z_polar_codex_cap16k_init4_run4`
-- Corrected retry suite (empty-diff resume, in-place evaluation, cap 32,768):
-  `/NHNHOME/home/profiled_runs/miniswe_small_parity_codex_fixed_retry4_cap32k_inplace_1train2rollout_20260722T020800Z`
-
-The corrected retry has not run successfully yet. Its first launch attempt
-failed during Apptainer preflight, before GPU allocation, with
-`Could not write info to setgroups: Permission denied`. No corrected-retry
-quality result exists as of this update.
 
 ## Source artifacts
 
@@ -174,40 +148,66 @@ SkyRL workers4:
 - Manifest: `/NHNHOME/home/skyrl_prorl_runs/miniswe_small_parity_1train2rollout_20260721T083500Z_skyrl_workers4/manifest.tsv`
 - Run directory: `/NHNHOME/home/skyrl_prorl_runs/miniswe_small_parity_1train2rollout_20260721T083500Z_skyrl_workers4/init4_run4`
 
-POLAR Mini-SWE:
+POLAR Mini-SWE run2:
 
-- Run2: `/NHNHOME/home/prorl_agent_server_runs/swegym_slime_grpo_3h200/miniswe_small_parity_1train2rollout_20260721T083500Z_polar_miniswe_init4_run2`
-- Run4: `/NHNHOME/home/prorl_agent_server_runs/swegym_slime_grpo_3h200/miniswe_small_parity_1train2rollout_20260721T083500Z_polar_miniswe_init4_run4`
+- Run directory: `/NHNHOME/home/prorl_agent_server_runs/swegym_slime_grpo_3h200/miniswe_small_parity_1train2rollout_20260721T083500Z_polar_miniswe_init4_run2`
 - Sweep log: `/NHNHOME/home/profiled_runs/miniswe_small_parity_1train2rollout_20260721T083500Z/polar_miniswe/sweep.log`
 - Trace summaries: `lightweight_trace_summary/`
-- GPU samples: `gpu_samples.csv`
+- GPU idle: `gpu_idle_summary.tsv`
 
-Invalid Codex 8,192-cap attempt:
-
-- Run: `/NHNHOME/home/prorl_agent_server_runs/swegym_slime_grpo_3h200/miniswe_small_parity_1train2rollout_20260721T083500Z_polar_codex_init4_run2`
-- Sweep log: `/NHNHOME/home/profiled_runs/miniswe_small_parity_1train2rollout_20260721T083500Z/polar_codex/sweep.log`
-- Signature: `total_len > max_tokens=8192`, `traces=1`, `accepted=0/4`.
-
-Corrected Codex 16,384-cap suite:
-
-- Suite: `/NHNHOME/home/profiled_runs/miniswe_small_parity_codex_cap16k_1train2rollout_20260722T002427Z`
-- Sweep log: `polar_codex_cap16k/sweep.log`
-- Run2 lightweight summaries: `/NHNHOME/home/prorl_agent_server_runs/swegym_slime_grpo_3h200/miniswe_small_parity_codex_cap16k_1train2rollout_20260722T002427Z_polar_codex_cap16k_init4_run2/lightweight_trace_summary/`
-- Run4 lightweight summaries: `/NHNHOME/home/prorl_agent_server_runs/swegym_slime_grpo_3h200/miniswe_small_parity_codex_cap16k_1train2rollout_20260722T002427Z_polar_codex_cap16k_init4_run4/lightweight_trace_summary/`
-
-Original suite controller:
+Suite controller:
 
 - Manifest: `/NHNHOME/home/profiled_runs/miniswe_small_parity_1train2rollout_20260721T083500Z/manifest.tsv`
 - Log: `/NHNHOME/home/profiled_runs/miniswe_small_parity_1train2rollout_20260721T083500Z/suite.log`
+
+Final tool-fixed POLAR Codex suite:
+
+- Suite log: `/NHNHOME/home/profiled_runs/miniswe_small_parity_codex_toolfix_review2_writableeval_1train2rollout_20260723T013500Z/suite.log`
+- Sweep log: `/NHNHOME/home/profiled_runs/miniswe_small_parity_codex_toolfix_review2_writableeval_1train2rollout_20260723T013500Z/polar_codex_fixed/sweep.log`
+- Run2: `/NHNHOME/home/prorl_agent_server_runs/swegym_slime_grpo_3h200/miniswe_small_parity_codex_toolfix_review2_writableeval_1train2rollout_20260723T013500Z_polar_codex_fixed_init4_run2`
+- Run4: `/NHNHOME/home/prorl_agent_server_runs/swegym_slime_grpo_3h200/miniswe_small_parity_codex_toolfix_review2_writableeval_1train2rollout_20260723T013500Z_polar_codex_fixed_init4_run4`
 
 ## Interpretation limits
 
 This is a deliberately small workload, so accuracy rates have high sampling
 variance. Trajectory-level resolution is not the same as unique-task pass rate
 when each prompt has two samples. The table reports both raw resolved
-trajectories and the unique solved-task count in the detail text. The matched
-SkyRL/POLAR speed observation is one small run. The failed 8,192-cap Codex
-attempt is excluded from all speed and quality conclusions. The completed
-16,384-cap Codex rows measure runtime and training liveness only; their 0%
-resolved rates are excluded from framework-quality conclusions because patch
-generation and evaluation were both defective.
+trajectories and the unique solved-task count in the detail text. Framework
+speed conclusions should wait for the matched SkyRL workers4 versus POLAR
+run4 row.
+
+## Codex patch-path validation — 2026-07-23
+
+Follow-up diagnosis showed that the zero-resolved Codex rows above did not
+exercise a healthy Codex patch path. `codex exec` had been forced onto
+`unified_exec`, while the model repeatedly selected `apply_patch`; the latter
+was not advertised, producing 17 run2 and 24 run4 undefined-tool errors. The
+harness now enables `apply_patch_freeform`, does not force `unified_exec`, and
+supports a bounded same-session review continuation after a nonempty diff.
+
+The corrected path was validated on `getmoto__moto-7023`, a task Mini-SWE
+resolved repeatedly in both parity configurations. Codex independently
+produced the reference source fix: check for an unknown Lake Formation
+resource and raise `EntityNotFound` before deletion. A refreshed Singularity
+evaluator initially exposed two more infrastructure defects: `/testbed` was
+read-only, and the fallback test command used an ambiguous/corrupted Python
+path. The evaluator now copies `/testbed` to
+`/polar/session/workspace`, applies the patch there, and runs tests through
+`/polar/session/home/.venv/bin/python`.
+
+Final validation suite:
+
+- Stem: `prorl_codex_toolfix_lakeformation7023_finaleval2_20260723T012000Z`
+- Run: `/NHNHOME/home/prorl_agent_server_runs/swegym_slime_grpo_3h200/prorl_codex_toolfix_lakeformation7023_finaleval2_20260723T012000Z_polar_codex_fixed_init2_run2`
+- Result: 6 `COMPLETED`, 3 resolved and 3 unresolved; no patch-application or
+  evaluator errors. The three resolved evaluations exited 0 in
+  `/polar/session/workspace`.
+- Constraints: existing sandbox image only, no SIF, no Nsight, and no SkyRL or
+  Mini-SWE rerun.
+
+This proves that corrected POLAR Codex can return patches that apply, execute
+the benchmark tests, and resolve a task. The 3/6 smoke is a patch-path
+validation, not a replacement accuracy estimate for the original 16-task
+matrix. The earlier 0/40 rows remain historical measurements of the broken
+tool configuration and must not be treated as a fair Codex-versus-Mini-SWE
+quality comparison.

@@ -1,7 +1,7 @@
 # POLAR Mini-SWE `init8/run4` and `init8/run8` vs SkyRL Workers 8 and Codex CLI
 
-Generated from completed measured artifacts on 2026-07-21. No Nsight data is
-used in this report.
+Generated from completed measured artifacts through 2026-07-23. No Nsight
+data is used in this report.
 
 ## Bottom line
 
@@ -29,6 +29,26 @@ per trajectory, compared with 38.84 calls and 6845.1 tokens for POLAR Mini-SWE
 run8. Codex timing is therefore a systems/load reference, not evidence of
 useful agent throughput.
 
+A later tool-fixed Codex suite at the smaller `init4/run2/eval4` and
+`init4/run4/eval4` worker points establishes that the earlier topology-matched
+Codex zeroes were also invalid quality measurements. The repaired runs
+completed 40/40 sessions each and resolved 6/40 (5 unique task groups) and
+8/40 (6 unique groups), respectively, with no patch-application or evaluator
+errors. These smaller worker points are quality-path validation and are not
+substitutes for rerunning the `init8` topology.
+
+## Tool-fixed Codex quality-path results
+
+| Worker point | Wall min | Terminal sessions | Resolved | Unique solved groups | Empty / nonempty diff | Apply / evaluator failures |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| init 4, run 2, eval 4 | 54.9 | 40 COMPLETED | 6/40 (15.0%) | 5 | 21 / 19 | 0 / 0 |
+| init 4, run 4, eval 4 | 54.0 | 40 COMPLETED | 8/40 (20.0%) | 6 | 20 / 20 | 0 / 0 |
+
+The repaired harness advertised a working patch tool, allowed four empty-diff
+resumes and two review retries, refreshed the runtime, and evaluated the
+writable checkout at `/polar/session/workspace`. No SkyRL or Mini-SWE row was
+rerun; the suite used Singularity sandbox images without SIF or Nsight.
+
 ## Main comparison
 
 | System | Requested/matched worker point | Wall min | Accepted sessions | Sessions/min | LLM calls/session | Completion tok/session | Completion tok/min | Reward avg | Resolved |
@@ -36,13 +56,20 @@ useful agent throughput.
 | POLAR + Mini-SWE | init 8, run 4, eval 8 | 218.9 | 272 | 1.243 | 36.06 | 6718.7 | 8350 | 0.000 | 0 |
 | POLAR + Mini-SWE | init 8, run 8, eval 8 | 175.2 | 323 | 1.844 | 38.84 | 6845.1 | 12622 | 0.000* | 0* |
 | SkyRL + Mini-SWE | parallel generation workers 8 | 228.7 | 200 | 0.875 | 37.70 | 9811.4 | 8580 | 0.200 | 40/200 |
-| POLAR + Codex CLI | init 8, run 4, eval 8 | 52.9 | 324 | 6.125 | 6.09 | 409.5 | 2508 | 0.000 | 0/324 reward-positive |
-| POLAR + Codex CLI | init 8, run 8, eval 8 | 52.5 | 320 | 6.095 | 5.91 | 373.7 | 2278 | 0.000 | 0/320 reward-positive |
+| POLAR + Codex CLI (historical broken tool path) | init 8, run 4, eval 8 | 52.9 | 324 | 6.125 | 6.09 | 409.5 | 2508 | invalid | invalid (recorded 0/324) |
+| POLAR + Codex CLI (historical broken tool path) | init 8, run 8, eval 8 | 52.5 | 320 | 6.095 | 5.91 | 373.7 | 2278 | invalid | invalid (recorded 0/320) |
+| POLAR + Codex CLI (tool-fixed) | init 4, run 2, eval 4 | 54.9 | 40 | 0.729 | 52.00 | 9797.5 | 7138 | 0.150 | 6/40 |
+| POLAR + Codex CLI (tool-fixed) | init 4, run 4, eval 4 | 54.0 | 40 | 0.741 | 52.90 | 10498.2 | 7776 | 0.200 | 8/40 |
 
 Derived values use:
 
 - `sessions/min = accepted sessions / wall minutes`
 - `completion tok/min = accepted sessions * average completion tokens / wall minutes`
+
+The tool-fixed rows contain terminal sessions rather than the larger
+historical accepted-trajectory sweep, and use smaller worker points. They are
+included here because they are the available valid Codex quality results; they
+must not be read as topology-matched `init8` performance measurements.
 
 `*` The run8 reward and resolved values were produced by the evaluator path bug
 described below and must not be used for an accuracy comparison.
@@ -129,11 +156,14 @@ the POLAR table.
   the historical zero-reward figures do not characterize its accuracy. The
   evaluator script hard-coded `cd /testbed`, whereas the agent's patch was in
   `/polar/session/workspace`. The rerun fixes the evaluator to test the latter.
-- The matched Codex run4 and run8 rows have 324 and 320 accepted trajectories,
-  respectively, and every saved trajectory has `reward: 0.0`. A separate Codex
-  audit also found predominantly empty patches
-  in this local-Qwen Responses/tool-call setup. Their 52.9- and 52.5-minute wall times must
-  not be interpreted as successful SWE throughput.
+- The historical matched Codex run4 and run8 rows have 324 and 320 accepted
+  trajectories, respectively, and every saved trajectory has `reward: 0.0`. A
+  separate audit found that their model/tool patch path was broken. Their
+  52.9- and 52.5-minute wall times must not be interpreted as successful SWE
+  throughput.
+- The later tool-fixed `init4` suite resolved tasks at both worker points with
+  zero apply/evaluator failures. It validates the repaired Codex quality path,
+  but does not provide replacement `init8` topology measurements.
 - POLAR Mini-SWE completed without OOM under the 8192-token trace cap. Its
   historical accuracy is unknown because of the evaluator path mismatch, so a
   corrected rerun is required before comparing accuracy with SkyRL.
@@ -166,6 +196,12 @@ Topology-matched Codex source:
 - Run4 directory: `/NHNHOME/home/prorl_agent_server_runs/swegym_slime_grpo_3h200/qwen35_lighttrace_mb2_steps2_worker_matrix_async2_ctn_20260717T051225Z_init8_run4`
 - Run8 directory: `/NHNHOME/home/prorl_agent_server_runs/swegym_slime_grpo_3h200/qwen35_lighttrace_mb2_steps2_worker_matrix_async2_ctn_20260717T051225Z_init8_run8`
 
+Tool-fixed Codex quality-path source:
+
+- Suite: `miniswe_small_parity_codex_toolfix_review2_writableeval_1train2rollout_20260723T013500Z`
+- Run2 directory: `/NHNHOME/home/prorl_agent_server_runs/swegym_slime_grpo_3h200/miniswe_small_parity_codex_toolfix_review2_writableeval_1train2rollout_20260723T013500Z_polar_codex_fixed_init4_run2`
+- Run4 directory: `/NHNHOME/home/prorl_agent_server_runs/swegym_slime_grpo_3h200/miniswe_small_parity_codex_toolfix_review2_writableeval_1train2rollout_20260723T013500Z_polar_codex_fixed_init4_run4`
+
 ## Scope
 
 This report compares two completed POLAR Mini-SWE rows with the explicitly
@@ -173,4 +209,6 @@ requested SkyRL workers-8 baseline and two topology-matched Codex CLI rows. It
 does not claim statistical significance from a single run and does not use the
 later POLAR worker configurations that were stopped before completion. The
 historical POLAR resolved rates are retained for artifact fidelity but are not
-valid accuracy measurements because of the evaluator path bug.
+valid accuracy measurements because of the evaluator path bug. The tool-fixed
+Codex `init4` rows are included to document corrected patch quality, not as
+topology-matched replacements for the historical `init8` Codex rows.

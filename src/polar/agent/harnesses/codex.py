@@ -22,6 +22,9 @@ class CodexHarness(BaseHarness):
         self._empty_diff_retries = int(self.settings.get("empty_diff_retries", 0))
         if self._empty_diff_retries < 0:
             raise ValueError("empty_diff_retries must be non-negative")
+        self._review_retries = int(self.settings.get("review_retries", 0))
+        if self._review_retries < 0:
+            raise ValueError("review_retries must be non-negative")
 
     async def setup(self, runtime: BaseRuntime) -> None:
         await runtime.exec(f"mkdir -p {self._codex_home}")
@@ -77,7 +80,7 @@ class CodexHarness(BaseHarness):
             "--dangerously-bypass-approvals-and-sandbox",
             "--skip-git-repo-check",
             "--json",
-            "--enable unified_exec",
+            "--enable apply_patch_freeform",
             "-c 'model_provider=\"harness_proxy\"'",
             "-c 'model_providers.harness_proxy.name=\"Harness Proxy\"'",
             '-c "model_providers.harness_proxy.base_url=\\"$OPENAI_BASE_URL\\""',
@@ -100,12 +103,19 @@ class CodexHarness(BaseHarness):
             f"codex exec {flags_str} -- {escaped} "
             f"2>&1 </dev/null | tee {RUNTIME_AGENT_LOG_DIR}/codex.txt"
         )
-        if self._empty_diff_retries:
+        if self._empty_diff_retries or self._review_retries:
             retry_prompt = shlex.quote(
                 "Your previous response ended before making a tracked repository "
                 "edit. Continue the same task now. Use the available tools to make "
                 "the best targeted source-code fix, run relevant tests if practical, "
                 "and do not finish until `git diff --stat` is non-empty."
+            )
+            review_prompt = shlex.quote(
+                "Review your current implementation before submitting it. Inspect "
+                "the complete git diff and the issue again, look for related code "
+                "paths or state that also need to change, and run the most relevant "
+                "available tests. Fix any incomplete or incorrect behavior you find. "
+                "Keep the patch focused and leave the repository in its best final state."
             )
             run_command = (
                 "set -o pipefail; "
@@ -127,6 +137,16 @@ class CodexHarness(BaseHarness):
                 + "printf '%s\\n' 'POLAR_CODEX_EMPTY_DIFF_RETRIES_EXHAUSTED=1' "
                 + f"| tee -a {RUNTIME_AGENT_LOG_DIR}/codex.txt; "
                 + "fi"
+                + "; review=0; "
+                + f'while [ "$review" -lt {self._review_retries} ]; do '
+                + 'review=$((review + 1)); '
+                + "printf '%s\\n' \"POLAR_CODEX_REVIEW_RETRY=${review}\" "
+                + f"| tee -a {RUNTIME_AGENT_LOG_DIR}/codex.txt; "
+                + f"codex exec resume {flags_str} --last {review_prompt} "
+                + f"2>&1 </dev/null | tee -a {RUNTIME_AGENT_LOG_DIR}/codex.txt; "
+                + "status=${PIPESTATUS[0]}; "
+                + 'if [ "$status" -ne 0 ]; then exit "$status"; fi; '
+                + "done"
             )
 
         return [
@@ -157,6 +177,11 @@ Important execution rules:
   material only.
 - Do not end with only analysis or a plan. Continue working until you have
   edited at least one tracked file in the current repository.
+- Use the tools that Codex advertises. In particular, use the dedicated
+  `apply_patch` tool for source edits when it is available; otherwise use a
+  shell command that edits the current checkout.
+- Run the most relevant existing tests after editing. If they fail, inspect the
+  failure and keep working instead of returning the first non-empty diff.
 - Before finishing, run `git diff --stat` and ensure it is non-empty. The
   evaluator will collect `git diff` from this directory.
 - If tests or reproduction steps are unavailable, still make the best targeted
