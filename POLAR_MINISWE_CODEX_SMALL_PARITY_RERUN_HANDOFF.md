@@ -103,6 +103,35 @@ bash -n tmp/parity32k_instrumented_20260723/run_polar_codex.sh
 python3 -m py_compile /NHNHOME/home/SkyRL/skyrl/train/fully_async_trainer.py
 ```
 
+### Mandatory Mini-SWE wheelhouse preflight
+
+The runtime bind uses `/tmp/prorl-miniswe-wheelhouse:/polar/wheelhouse:ro`.
+Because `/tmp` is ephemeral, the directory may disappear after host/container
+recreation. A missing bind source makes Singularity exit 255 in prepare action
+2 and causes an unbounded `accepted=0/4` replenishment loop.
+
+Rebuild and validate it before every launch:
+
+```bash
+WHEELHOUSE=/tmp/prorl-miniswe-wheelhouse
+mkdir -p "${WHEELHOUSE}"
+if ! compgen -G "${WHEELHOUSE}/mini_swe_agent-2.4.2-*.whl" >/dev/null; then
+  python3 -m pip download --dest "${WHEELHOUSE}" "mini-swe-agent==2.4.2"
+fi
+test -f "${WHEELHOUSE}/mini_swe_agent-2.4.2-py3-none-any.whl"
+
+session_dir=$(mktemp -d /tmp/miniswe-prepare-preflight.XXXXXX)
+/usr/bin/singularity exec --no-mount bind-paths \
+  --bind "${session_dir}:/polar/session" \
+  --bind "${WHEELHOUSE}:/polar/wheelhouse:ro" \
+  /NHNHOME/home/prorl_agent_server_env/apptainer_sandboxes/swegym_b200/getmoto__moto-7365 \
+  /bin/sh -lc "export HOME=/polar/session/home; mkdir -p \"\$HOME/.venv/bin\"; ln -sf /opt/miniconda3/envs/testbed/bin/python \"\$HOME/.venv/bin/python\"; \"\$HOME/.venv/bin/python\" -m pip install -q --no-index --find-links /polar/wheelhouse --target /polar/session/miniswe-py mini-swe-agent==2.4.2; PYTHONPATH=/polar/session/miniswe-py \"\$HOME/.venv/bin/python\" -c \"import minisweagent; print(minisweagent.__file__)\""
+# must exit 0 and print a path below /polar/session/miniswe-py
+```
+
+Do not launch POLAR Mini-SWE if this fails. Preserve the wheelhouse for the
+whole suite.
+
 Sandbox Codex preflight:
 
 ```bash
@@ -160,6 +189,20 @@ nvidia-smi --query-gpu=index,memory.used,utilization.gpu --format=csv,noheader,n
 
 ## Fresh exact rerun
 
+Before launch, verify both ignored wrappers retain literal shell defaults:
+
+```bash
+rg -n '^SUITE_STEM=\$\{SUITE_STEM:-[^}]+\}$' \
+  tmp/parity32k_instrumented_20260723/run_polar_miniswe.sh \
+  tmp/parity32k_instrumented_20260723/run_polar_codex.sh
+# exactly two matches required
+! rg -n '^SUITE_STEM=$' tmp/parity32k_instrumented_20260723/*.sh
+```
+
+Do not place `${SUITE_STEM:-...}` in an interpolating Perl replacement: Perl
+consumes it and writes `SUITE_STEM=`. Use a literal-safe patch or single-quoted
+`sed`, then rerun `bash -n` and the checks above.
+
 Generate a unique UTC tag and launch SkyRL exactly:
 
 ```bash
@@ -203,6 +246,12 @@ Resolved POLAR evaluations must record
 `evaluated_repo_dir=/polar/session/workspace`. Codex must advertise a working
 patch tool, evaluate nonempty patches, report apply/evaluator failures, accept
 real training traces, and never loop at `accepted=0/4`.
+
+Inspect the first POLAR Mini-SWE terminal results immediately. If consecutive
+results are all `ERROR` with `runtime initialization failed: prepare action 2
+failed with exit code 255`, stop that exact row instead of allowing hundreds of
+replacement failures. Recheck the wheelhouse bind and manual sandbox install,
+then relaunch with a fresh stem.
 
 A vanished tmux or `suite.complete` alone is not proof. Inspect manifests,
 sweep logs, result JSON, and GPUs. After completion tmux must be gone and GPUs
