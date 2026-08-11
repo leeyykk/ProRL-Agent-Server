@@ -55,6 +55,13 @@ def build_trace_from_completion(completion: CompletionRecord) -> Trace:
     """Normalize one stored completion record into a trajectory trace."""
 
     request = completion.request if isinstance(completion.request, dict) else {}
+    if not request and isinstance(completion.original_request, dict):
+        # Persisted gateway completion records retain the client conversation
+        # as ``original_request``. Rebuilding a trajectory from disk must use
+        # it when the normalized ``request`` field is absent, otherwise every
+        # prompt has an empty message list and multi-turn builders cannot
+        # reconstruct chains.
+        request = completion.original_request
     response = completion.response if isinstance(completion.response, dict) else {}
     choices = response.get("choices")
     first_choice = (

@@ -142,7 +142,11 @@ def _rewrite_eval_script_repo_dir(eval_script: str, repo_dir: str) -> str:
     normalized_repo_dir = repo_dir.rstrip("/") or "/"
     if normalized_repo_dir == "/testbed":
         return eval_script
-    return eval_script.replace("/testbed", normalized_repo_dir)
+    eval_script = eval_script.replace("/testbed", normalized_repo_dir)
+    return eval_script.replace(
+        "/tmp/polar_swegym_test.patch",
+        "/polar/session/polar_swegym_test.patch",
+    )
 
 def _load_harness(instance: dict[str, Any]) -> tuple[Any, Any]:
     try:

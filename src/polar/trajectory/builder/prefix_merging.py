@@ -88,9 +88,15 @@ def _is_grouping_noise_message(message: dict[str, Any]) -> bool:
     role = message.get("role")
     if role in ["tool"]:
         return True
+    content = _flatten_message_content(message.get("content")).strip()
+    if role == "user" and content.startswith("<returncode>") and "<output>" in content:
+        # Mini-SWE transports shell results as structured user messages rather
+        # than tool-role messages. They are interstitial harness output, not a
+        # new conversation root, and remain present in the merged token stream
+        # with loss_mask=0.
+        return True
     if role == "assistant" and message.get("tool_calls"):
         return False
-    content = _flatten_message_content(message.get("content")).strip()
     if role == "assistant" and not content and not message.get("tool_calls"):
         return True
     return False
@@ -254,13 +260,12 @@ class PrefixMergingBuilder(BaseTrajectoryBuilder):
             Ci_trace = build_trace_from_completion(chain[i])
             Ci_prompt_ids = list(Ci_trace.prompt_ids)
 
-            # Canonical-vs-canonical prefix check: both sides are server-side
-            # tokenizations of the same message prefix — matches reliably
-            # unless the harness rewrote prior messages.
-            if (
-                len(Ci_prompt_ids) < len(prev_prompt_ids)
-                or Ci_prompt_ids[: len(prev_prompt_ids)] != prev_prompt_ids
-            ):
+            continuation_offset = self._continuation_offset(
+                previous_prompt_ids=prev_prompt_ids,
+                previous_response_ids=prev_raw_response,
+                prompt_ids=Ci_prompt_ids,
+            )
+            if continuation_offset is None:
                 logger.debug(
                     "prefix_merging: canonical prefix break at step %d/%d",
                     i,
@@ -269,7 +274,7 @@ class PrefixMergingBuilder(BaseTrajectoryBuilder):
                 break
 
             # canonical_tail = canonical tokens for [prev assistant msg + new interstitials].
-            canonical_tail = Ci_prompt_ids[len(prev_prompt_ids):]
+            canonical_tail = Ci_prompt_ids[continuation_offset:]
             interstitial = self._slice_interstitial(
                 canonical_tail=canonical_tail,
                 prev_raw_response=prev_raw_response,
@@ -435,12 +440,11 @@ class PrefixMergingBuilder(BaseTrajectoryBuilder):
         hide genuine token-level divergence (cache-control shifts, tools
         schema rewrites, ``<system-reminder>`` injections).
 
-        The *sufficient* condition is the strict append-only token-prefix
-        invariant: ``C_{k+1}.prompt_ids`` must start with ``C_k.prompt_ids``.
-        Enforcing this at chain-join time means a completion whose raw
-        tokenization diverges from the waiting chain's tail starts its own
-        new chain, instead of being silently appended (only to be dropped
-        later in finalization).
+        The sufficient condition is token-level continuation: either the old
+        prompt is an exact prefix, or the new canonical prompt replaces only
+        transient generation scaffolding and contains the exact raw sampled
+        response at the divergence. A completion that fails this check starts
+        a new chain instead of polluting an existing one.
 
         Scans candidates in FIFO order; returns the first compatible index
         and pops it.  Returns None if no candidate passes the token check.
@@ -450,19 +454,61 @@ class PrefixMergingBuilder(BaseTrajectoryBuilder):
             return None
         for pos, chain_idx in enumerate(queue):
             last_trace = build_trace_from_completion(chains[chain_idx][-1])
-            last_pids = last_trace.prompt_ids
-            if (
-                not prompt_ids
-                or not last_pids
-                or len(prompt_ids) < len(last_pids)
-                or prompt_ids[: len(last_pids)] != last_pids
-            ):
+            if PrefixMergingBuilder._continuation_offset(
+                previous_prompt_ids=last_trace.prompt_ids,
+                previous_response_ids=last_trace.response_ids,
+                prompt_ids=prompt_ids,
+            ) is None:
                 continue
             del queue[pos]
             if not queue:
                 waiting_chains.pop(prompt_key, None)
             return chain_idx
         return None
+
+    @staticmethod
+    def _continuation_offset(
+        *,
+        previous_prompt_ids: list[int],
+        previous_response_ids: list[int],
+        prompt_ids: list[int],
+    ) -> int | None:
+        """Locate where the previous sampled response begins in a later prompt.
+
+        Some chat templates end a generation prompt with transient scaffolding
+        that is not reproduced when the assistant message is rendered into the
+        next request. Qwen 3.5, for example, replaces its four-token empty
+        thinking suffix with the sampled assistant body. In that case the
+        entire previous prompt is not a prefix of the next prompt even though
+        the conversation is append-only.
+
+        Accept either an exact prompt prefix or a divergence where the later
+        prompt contains the *exact raw sampled response* immediately after the
+        longest common prompt prefix. The message-level grouping key remains
+        a separate required condition, so unrelated prompts cannot join merely
+        because they happen to contain the same token sequence.
+        """
+        if not previous_prompt_ids or not prompt_ids:
+            return None
+        if (
+            len(prompt_ids) >= len(previous_prompt_ids)
+            and prompt_ids[: len(previous_prompt_ids)] == previous_prompt_ids
+        ):
+            return len(previous_prompt_ids)
+        if not previous_response_ids:
+            return None
+
+        common = 0
+        for previous_token, current_token in zip(previous_prompt_ids, prompt_ids):
+            if previous_token != current_token:
+                break
+            common += 1
+        if common == 0 or common == len(previous_prompt_ids):
+            return None
+        response_end = common + len(previous_response_ids)
+        if prompt_ids[common:response_end] != previous_response_ids:
+            return None
+        return common
 
 
 def _top_level_scheduler_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
