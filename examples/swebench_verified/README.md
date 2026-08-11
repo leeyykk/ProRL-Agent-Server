@@ -80,3 +80,26 @@ uv run python examples/swebench_verified/submit_swebench_tasks.py \
   --num-samples 8 \
   --max-tasks 10
 ```
+
+### Mini-SWE-Agent
+
+Mini-SWE-Agent 2.4.2 is installed into each session during runtime preparation and uses the checked-in SWE-bench prompt configuration. Submit it with:
+
+```bash
+uv run python examples/swebench_verified/submit_swebench_tasks.py \
+  --harness mini_swe_agent \
+  --topology examples/swebench_verified/topology.yaml \
+  --runtime-backend apptainer \
+  --max-tasks 10
+```
+
+If `/tmp` is mounted `noexec`, point gateway sessions at an executable filesystem either with `session_base_dir` on each gateway node in the topology or when starting the gateway:
+
+```bash
+mkdir -p "$PWD/polar_sessions"
+POLAR_SESSION_BASE_DIR="$PWD/polar_sessions" \
+  uv run polar serve_gateway -c examples/swebench_verified/topology.yaml \
+  --node-id localhost-node-01
+```
+
+On clusters that restrict Apptainer privileges or bind mounts, pass the site-specific flags through `POLAR_APPTAINER_EXEC_ARGS`; for example, `--no-privs --no-mount bind-paths`.

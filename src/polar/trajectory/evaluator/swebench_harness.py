@@ -87,7 +87,9 @@ class SwebenchHarnessEvaluator(BasePatchEvaluator):
 
         test_spec, get_eval_report = _load_harness(instance)
         eval_script_host = host_session_dir / "eval.sh"
-        eval_script_host.write_text(test_spec.eval_script)
+        eval_script_host.write_text(
+            _rewrite_eval_script_repo_dir(test_spec.eval_script, self.repo_dir)
+        )
 
         # Place the log inside an instance_id-named directory so that
         # swegym/swebench get_logs_eval can parse the repo from the path.
@@ -121,10 +123,26 @@ class SwebenchHarnessEvaluator(BasePatchEvaluator):
                 "test_timeout": False,
                 "exit_code": result.return_code,
                 "grading_report": report,
+                "evaluated_repo_dir": self.repo_dir,
             },
             combined_path,
         )
 
+
+
+def _rewrite_eval_script_repo_dir(eval_script: str, repo_dir: str) -> str:
+    """Point a harness-generated script at the repository that POLAR edited.
+
+    SWE-Bench and SWE-Gym test specs conventionally hard-code /testbed.
+    POLAR may stage a writable copy elsewhere, such as
+    /polar/session/workspace. Without this rewrite the evaluator tests the
+    untouched image repository while the generated patch lives in repo_dir.
+    """
+
+    normalized_repo_dir = repo_dir.rstrip("/") or "/"
+    if normalized_repo_dir == "/testbed":
+        return eval_script
+    return eval_script.replace("/testbed", normalized_repo_dir)
 
 def _load_harness(instance: dict[str, Any]) -> tuple[Any, Any]:
     try:

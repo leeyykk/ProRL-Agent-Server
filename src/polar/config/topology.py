@@ -38,6 +38,7 @@ class GatewayNodeConfig(_StrictModel):
     max_init_workers: int = Field(default=4, gt=0)
     max_run_workers: int = Field(default=2, gt=0)
     max_postrun_workers: int = Field(default=4, gt=0)
+    session_base_dir: str | None = None
     default_runtime: RuntimeSpec | None = None
 
     @model_validator(mode="before")
@@ -61,6 +62,16 @@ class GatewayNodeConfig(_StrictModel):
     @classmethod
     def _strip_model(cls, value: str) -> str:
         return (value or "").strip()
+
+    @field_validator("session_base_dir")
+    @classmethod
+    def _strip_session_base_dir(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        text = value.strip()
+        if not text:
+            raise ValueError("gateway.nodes[].session_base_dir must be a non-empty string")
+        return text
 
     @field_validator("public_url")
     @classmethod
